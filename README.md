@@ -55,7 +55,25 @@ Production converts a formula into an executed batch.
 - Manual production date/time
 - Optional batch number
 
-### Reversible Production Deletion
+#### Reversible Production Deletion
 Each production record has a unique ID. Deleting a production, restores ingredient quantities accurately
 Uses the original formula + batch size
 This makes the system safe for correction of entry mistakes.
+
+## How to Run
+
+### Requirements:
+
+- Python 3.9+
+- No external libraries required
+
+Run:
+
+```bash
+python raw_materials_manager.py
+```
+The database file raw_materials.db will be created automatically in the same folder.
+
+## Contributions
+
+This project reflects a practical, real‑world formulation workflow. Improvements and forks are welcome.
