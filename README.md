@@ -1,79 +1,107 @@
-# Raw Material Management
+# Manufacturing & Inventory Management System
 
-A single‑file desktop application built using Python (Tkinter + SQLite) for managing ingredients, formulas (products), and production records.
+A Flask-based web application for managing end-to-end manufacturing workflows — from raw material tracking to finished goods, including production, packaging, audits, and manpower.
 
-This is the earliest version of the system — designed as an offline, lightweight tool for small‑scale manufacturing, pilot batches, and in‑house formulation tracking
+This version expands the original desktop tool into a modular, scalable system suitable for real-world manufacturing environments.
+
+---
 
 ## What This Software Is
 
-- A local desktop app, not a web app
-- Runs entirely offline
-- Uses a single SQLite database stored alongside the script
-- Focused on accuracy, traceability, and reversibility, not ERP complexity
+* Web-based application
+* Tracks materials, production, packaging, and outputs in one system
+* Focused on traceability and structured data flow
+
+---
 
 ## Core Modules
-### Ingredient / Stock Manager
 
-#### Manage raw materials with:
-- Ingredient name 
-- Quantity in kilograms
-- Supplier name
+### Raw Material Management
 
-#### Key behaviors:
+* Track ingredient stock levels
+* Add, update, and manage raw materials
+* Create Requisition Forms
+* Maintain structured inventory records
 
-- Alphabetical, case‑insensitive sorting
-- Alternating row colors for readability
-- Manual restocking (+kg)
-- Safe deletion with confirmation
+---
 
-### Product & Formula Management
+### Bulk Production
 
-Each Product represents a formula.
-#### Features:
-- Up to 30 ingredients per product
-- Percentage‑based formulation
-- Ingredient autocomplete from stock list
+* Convert formulas into bulk batches
+* Log production quantities
+* Track batch-level data
 
-Formula edits do not retroactively change past production records
+---
 
-### Production Management
+### Filling Operations
 
-Production converts a formula into an executed batch.
-#### Capabilities:
-- Select product + batch size (kg)
-- Auto‑calculate ingredient requirements
-- Stock sufficiency check before confirmation
-- Visual warning for insufficient ingredients
+* Record filling from bulk into units
+* Maintain linkage between bulk and filled quantities
+* Prevent inconsistencies in quantity tracking
 
-#### Confirmed production:
-- Subtracts raw material stock
-- Creates a permanent production record
+---
 
-#### Each production record stores:
-- Product name
-- Batch size (kg)
-- Manual production date/time
-- Optional batch number
+### Boxing & Packaging
 
-#### Reversible Production Deletion
-Each production record has a unique ID. Deleting a production, restores ingredient quantities accurately
-Uses the original formula + batch size
-This makes the system safe for correction of entry mistakes.
+* Track packaging materials
+* Log boxing operations
+* Maintain finished unit counts
 
-## How to Run
+---
 
-### Requirements:
+### Finished Goods
 
-- Python 3.9+
-- No external libraries required
+* View completed products
+* Track inventory ready for dispatch or sale
 
-Run:
+---
 
-```bash
-python raw_materials_manager.py
-```
-The database file raw_materials.db will be created automatically in the same folder.
+### Manpower Tracking
+
+* Record workforce allocation
+* Monitor manpower usage across operations
+
+---
+
+### Audits
+
+* Perform monthly or periodic audits
+* Verify inventory accuracy
+* Identify discrepancies
+
+---
+
+### Google Sheets Integration
+
+* Sync selected data to Google Sheets
+* Enable external tracking and reporting
+
+---
+
+## Key Features
+
+* End-to-end manufacturing workflow tracking
+* Structured data flow across all stages
+* Batch-level traceability
+* Inventory consistency checks
+* Modular system design (easy to expand)
+
+---
+
+## Notes
+
+* This is an actively evolving system
+* Designed from real manufacturing workflow requirements
+* Prioritizes clarity and correctness over unnecessary complexity
+
+---
+
+## Previous Version
+
+The earlier desktop version (Tkinter-based) is preserved in the repository history for reference.
+
+---
 
 ## Contributions
 
-This project reflects a practical, real‑world formulation workflow. Improvements and forks are welcome.
+This project is built from practical formulation and manufacturing experience. Suggestions and improvements are welcome.
