@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Bulk Production{% endblock %}
+{% block content %}
+<div class="card">
+    <h2>⚗️ Bulk Production</h2>
+    <form id="productionForm" onsubmit="confirmProduction(event)">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Date *</label>
+                <input type="date" id="prodDate" required>
+            </div>
+            <div class="form-group">
+                <label>Product *</label>
+                <select id="prodProduct" required onchange="clearRequirements()">
+                    <option value="">Select Product</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Batch Number *</label>
+                <input type="text" id="prodBatch" required placeholder="e.g., BATCH001">
+            </div>
+            <div class="form-group">
+                <label>Batch Size (kg planned) *</label>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()" id="prodBatchSize">
+            </div>
+            <div class="form-group">
+                <label>Actual Yield (kg produced) *</label>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()" id="prodYield">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea id="prodNotes" rows="2"></textarea>
+        </div>
+        <button type="button" class="btn btn-warning" onclick="checkRequirements()">Check RM Requirements</button>
+        <button type="submit" class="btn btn-success">Confirm Production</button>
+    </form>
+</div>
+
+<div id="requirementsCard" class="card" style="display: none;">
+    <h3>Raw Material Requirements</h3>
+    <div id="requirementsTable"></div>
+</div>
+
+<div class="card">
+    <h3>Recent Production History</h3>
+    <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.5rem;">
+        <label>Month:</label>
+        <input type="month" id="prodMonth" value="">
+        <label>Products (optional, comma-separated):</label>
+        <input id="prodHistoryProduct" type="text" placeholder="e.g. Product A, Product B" style="min-width:200px;">
+        <button class="btn btn-primary" onclick="loadHistory()">Filter</button>
+    </div>
+    <div id="productionHistory"></div>
+</div>
+
+<script>
+async function loadProducts() {
+    const response = await fetch('/api/products');
+    const result = await response.json();
+    const select = document.getElementById('prodProduct');
+    select.innerHTML = '<option value="">Select Product</option>';
+    if (result.success) {
+        result.data.forEach(p => {
+            select.innerHTML += `<option value="${p.name}">${p.name}</option>`;
+        });
+    }
+}
+
+function clearRequirements() {
+    document.getElementById('requirementsCard').style.display = 'none';
+}
+
+async function checkRequirements() {
+    const product = document.getElementById('prodProduct').value;
+    const batchSize = document.getElementById('prodBatchSize').value;
+    if (!product || !batchSize) {
+        showAlert('Please select product and enter batch size', 'warning');
+        return;
+    }
+    const response = await fetch('/api/bulk-production/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_name: product, batch_size_kg: batchSize })
+    });
+    const result = await response.json();
+    if (result.success) {
+        const card = document.getElementById('requirementsCard');
+        const table = document.getElementById('requirementsTable');
+        table.innerHTML = `<table><thead><tr><th>Ingredient</th><th>%</th><th>Required (kg)</th><th>Available (kg)</th><th>Status</th></tr></thead><tbody>
+            ${result.data.requirements.map(r => `
+                <tr class="${r.sufficient ? '' : 'insufficient'}">
+                    <td>${r.ingredient}</td>
+                    <td>${r.percentage}%</td>
+                    <td>${r.required_kg}</td>
+                    <td>${r.available_kg}</td>
+                    <td>${r.sufficient ? '<span class="sufficient">✓ OK</span>' : '<span class="insufficient">✗ INSUFFICIENT</span>'}</td>
+                </tr>
+            `).join('')}
+        </tbody></table>`;
+        card.style.display = 'block';
+        if (!result.data.can_produce) {
+            showAlert('Insufficient raw materials! Cannot proceed with production.', 'danger');
+        } else {
+            showAlert('✓ All materials available. You can proceed with production.', 'success');
+        }
+    }
+}
+
+async function confirmProduction(event) {
+    event.preventDefault();
+    const data = {
+        date: document.getElementById('prodDate').value,
+        product_name: document.getElementById('prodProduct').value,
+        batch_number: document.getElementById('prodBatch').value,
+        batch_size_kg: document.getElementById('prodBatchSize').value,
+        actual_yield_kg: document.getElementById('prodYield').value,
+        notes: document.getElementById('prodNotes').value
+    };
+    if (!confirm(`Confirm production?
+
+This will subtract raw materials based on batch size (${data.batch_size_kg} kg) and add bulk based on actual yield (${data.actual_yield_kg} kg).`)) return;
+    const response = await fetch('/api/bulk-production/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    if (result.success) {
+        showAlert(`Production confirmed! Yield loss: ${result.data.yield_loss_kg} kg (${result.data.yield_percentage}%)`, 'success');
+        // Show allocation details / notifications when FIFO switched lots or multiple costs used
+        if (result.allocations) {
+            let msgParts = [];
+            for (const ing in result.allocations) {
+                const allocs = result.allocations[ing];
+                if (allocs && allocs.length > 0) {
+                    // if more than one allocation or lot_id is null, notify
+                    if (allocs.length > 1 || allocs.some(a => a.lot_id === null)) {
+                        const parts = allocs.map(a => `${a.qty}kg @ ${a.unit_cost}`);
+                        msgParts.push(`${ing}: ${parts.join(' + ')}`);
+                    }
+                }
+            }
+            if (msgParts.length) {
+                showAlert('Cost allocations used: ' + msgParts.join(' | '), 'info');
+            }
+        }
+        document.getElementById('productionForm').reset();
+        document.getElementById('prodDate').value = new Date().toISOString().split('T')[0];
+        clearRequirements();
+        loadHistory();
+    } else {
+        showAlert(result.error, 'danger');
+    }
+}
+
+async function loadHistory() {
+    const productText = document.getElementById('prodHistoryProduct')?.value || '';
+    const month = document.getElementById('prodMonth')?.value || '';
+    let url = '/api/bulk-production/history';
+    const params = [];
+    if (productText) params.push(`products=${encodeURIComponent(productText)}`);
+    if (month) params.push(`month=${encodeURIComponent(month)}`);
+    if (params.length) url += '?' + params.join('&');
+    const response = await fetch(url);
+    const result = await response.json();
+    const container = document.getElementById('productionHistory');
+    if (result.success && result.data.length > 0) {
+        container.innerHTML = `<table><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Batch Size</th><th>Yield (kg)</th><th>Loss (kg)</th><th>Yield %</th><th>Actions</th></tr></thead><tbody>
+            ${result.data.map(p => `
+                <tr><td>${p.date}</td><td>${p.product_name}</td><td>${p.batch_number}</td><td>${p.batch_size_kg} kg</td><td>${p.actual_yield_kg} kg</td><td>${parseFloat(p.yield_loss_kg).toFixed(4).replace(/\.?0+$/, '')} kg</td><td>${p.yield_percentage.toFixed(2)}%</td>
+                <td><button class="btn btn-danger" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;" onclick="deleteProduction(${p.id})">Delete</button></td></tr>
+            `).join('')}
+        </tbody></table>`;
+    } else {
+        container.innerHTML = '<p>No production history yet.</p>';
+    }
+}
+
+async function deleteProduction(id) {
+    if (!confirm('Delete this production? This will restore raw materials and remove bulk stock.')) return;
+    const response = await fetch(`/api/bulk-production/delete/${id}`, { method: 'DELETE' });
+    const result = await response.json();
+    if (result.success) {
+        showAlert(result.message, 'success');
+        loadHistory();
+    } else {
+        showAlert(result.error, 'danger');
+    }
+}
+
+document.getElementById('prodDate').value = new Date().toISOString().split('T')[0];
+loadProducts();
+loadHistory();
+document.getElementById('prodMonth').value = new Date().toISOString().slice(0,7);
+// populate history product select
+setTimeout(() => {
+    const sel = document.getElementById('prodHistoryProduct');
+    const prodSel = document.getElementById('prodProduct');
+    if (sel && sel.tagName === 'SELECT' && prodSel) Array.from(prodSel.options).forEach(o => { if (o.value) sel.innerHTML += `<option value="${o.value}">${o.value}</option>`; });
+}, 200);
+</script>
+{% endblock %}

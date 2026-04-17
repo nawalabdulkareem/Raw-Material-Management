@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Manufacturing System V2{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📊 Dashboard - Monthly Overview</h2>
+    
+    <div class="form-group" style="max-width: 300px; margin-bottom: 2rem;">
+        <label>Select Month:</label>
+        <input type="month" id="selectedMonth" class="form-control" onchange="loadMonthlyData()">
+    </div>
+</div>
+
+<div id="productsContainer"></div>
+
+<div class="card" id="gapsCard" style="display: none;">
+    <h2>⚠️ Pending Items</h2>
+    <div id="unfilledSection"></div>
+    <div id="unboxedSection"></div>
+</div>
+
+<div class="card">
+    <h2>🚀 Quick Actions</h2>
+    <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <a href="/bulk-production" class="btn btn-primary">New Production</a>
+        <a href="/filling" class="btn btn-primary">New Filling</a>
+        <a href="/boxing" class="btn btn-primary">New Boxing</a>
+        <a href="/raw-materials" class="btn btn-success">Manage RM</a>
+        <a href="/packaging" class="btn btn-success">Manage Packaging</a>
+        <a href="/manpower" class="btn btn-warning">Enter Manpower</a>
+        <a href="/audit" class="btn btn-warning">Monthly Audit</a>
+        <button class="btn btn-warning" onclick="syncToGoogleSheets()">📊 Sync to Google Sheets</button>
+        <button class="btn btn-danger" onclick="deleteAllData()">🗑️ Delete All Data</button>
+    </div>
+</div>
+
+<div class="card">
+    <h2>💰 Monthly Consumption Costs</h2>
+    <div class="form-group" style="max-width: 600px;">
+        <input type="text" id="dashCostProducts" placeholder="Product names (comma-separated, or leave empty for all)">
+        <button class="btn btn-primary" onclick="loadDashboardCosts()">Load Costs</button>
+    </div>
+    <div id="dashboardCosts"></div>
+</div>
+
+<div class="card">
+    <h2>⚠️ Wastage Report (in Litres)</h2>
+    <div class="form-group" style="max-width: 600px;">
+        <input type="text" id="dashWastageProducts" placeholder="Product names (comma-separated, or leave empty for all)">
+        <button class="btn btn-primary" onclick="loadDashboardWastage()">Load Wastage</button>
+    </div>
+    <div id="dashboardWastage"></div>
+</div>
+
+<script>
+// Set current month as default
+document.getElementById('selectedMonth').value = new Date().toISOString().slice(0, 7);
+
+async function loadMonthlyData() {
+    const month = document.getElementById('selectedMonth').value;
+    if (!month) return;
+    
+    try {
+        const response = await fetch(`/api/dashboard/stats?month=${month}`);
+        const result = await response.json();
+        
+        if (result.success) {
+            displayProducts(result.data.products);
+            displayGaps(result.data.unfilled, result.data.unboxed);
+        } else {
+            showAlert('Error loading data: ' + result.error, 'danger');
+        }
+    } catch (error) {
+        showAlert('Error loading dashboard: ' + error.message, 'danger');
+    }
+}
+
+function displayProducts(products) {
+    const container = document.getElementById('productsContainer');
+    container.innerHTML = '';
+    
+    if (products.length === 0) {
+        container.innerHTML = '<div class="card"><p>No production data for this month.</p></div>';
+        return;
+    }
+    
+    products.forEach(product => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        
+        let html = `
+            <h3>${product.product_name}</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div>
+                    <strong>Total Planned:</strong><br>
+                    <span style="font-size: 1.5rem; color: #3498db;">${formatNumber(product.total_planned, 2)} kg</span>
+                </div>
+                <div>
+                    <strong>Total Yield:</strong><br>
+                    <span style="font-size: 1.5rem; color: #27ae60;">${formatNumber(product.total_yield, 2)} kg</span>
+                </div>
+            </div>
+        `;
+        
+        // Filling data
+        if (product.filling && product.filling.length > 0) {
+            html += '<h4>Filling Data:</h4>';
+            html += '<table style="margin-bottom: 1rem;"><thead><tr><th>Pack Size</th><th>Bottles Filled</th><th>Theoretical</th><th>Difference</th></tr></thead><tbody>';
+            product.filling.forEach(fill => {
+                const diff = fill.total_bottles - fill.theoretical_bottles;
+                const diffClass = diff >= 0 ? 'sufficient' : 'insufficient';
+                html += `
+                    <tr>
+                        <td>${fill.pack_size_kg} kg</td>
+                        <td>${fill.total_bottles}</td>
+                        <td>${fill.theoretical_bottles}</td>
+                        <td class="${diffClass}">${diff >= 0 ? '+' : ''}${diff}</td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table>';
+        }
+        
+        // Boxing data (monthly aggregates)
+        if (product.boxing && product.boxing.length > 0) {
+            html += '<h4>Boxing Data (monthly totals):</h4>';
+            html += '<table><thead><tr><th>Pack Size (kg)</th><th>Total Bottles Boxed</th></tr></thead><tbody>';
+            product.boxing.forEach(b => {
+                html += `
+                    <tr>
+                        <td>${b.pack_size_kg || '-'} kg</td>
+                        <td>${b.total_units}</td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table>';
+            html += `<p><strong>Boxes made this month:</strong> ${product.boxing_total_boxes_made || 0}</p>`;
+        }
+        
+        card.innerHTML = html;
+        container.appendChild(card);
+    });
+}
+
+function displayGaps(unfilled, unboxed) {
+    const card = document.getElementById('gapsCard');
+    const unfilledSection = document.getElementById('unfilledSection');
+    const unboxedSection = document.getElementById('unboxedSection');
+    
+    let hasGaps = false;
+    
+    if (unfilled && unfilled.length > 0) {
+        hasGaps = true;
+        let html = '<h3>Unfilled Bulk:</h3><ul>';
+        unfilled.forEach(item => {
+            const remaining = item.actual_yield_kg - item.used_kg;
+            html += `<li><strong>${formatNumber(remaining, 2)} kg</strong> of <strong>Batch ${item.batch_number}</strong> (${item.product_name}) left to be filled</li>`;
+        });
+        html += '</ul>';
+        unfilledSection.innerHTML = html;
+    } else {
+        unfilledSection.innerHTML = '';
+    }
+    
+        if (unboxed && unboxed.length > 0) {
+        hasGaps = true;
+        let html = '<h3>Unboxed Bottles:</h3><ul>';
+        unboxed.forEach(item => {
+            const remaining = ('available' in item) ? item.available : (item.total_bottles - item.boxed_units - (item.samples_sent || 0));
+            const samples = item.samples_sent || 0;
+            html += `<li><strong>${remaining} bottles</strong> of <strong>${item.product_name} (${item.pack_size_kg}kg)</strong> left to be boxed`;
+            if (samples > 0) html += ` (includes ${samples} samples)`;
+            html += `</li>`;
+        });
+        html += '</ul>';
+        unboxedSection.innerHTML = html;
+    } else {
+        unboxedSection.innerHTML = '';
+    }
+    
+    card.style.display = hasGaps ? 'block' : 'none';
+}
+
+async function syncToGoogleSheets() {
+    if (!confirm('Sync all data to Google Sheets?\n\nThis will update all tabs with your complete data.')) {
+        return;
+    }
+    
+    showAlert('Syncing to Google Sheets...', 'info');
+    
+    try {
+        const response = await fetch('/api/sync-to-sheets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(result.message + '\n\n' + result.details.join('\n'), 'success');
+        } else {
+            showAlert('Sync failed: ' + result.message, 'danger');
+        }
+    } catch (error) {
+        showAlert('Sync error: ' + error.message, 'danger');
+    }
+}
+
+// Load data on page load
+loadMonthlyData();
+
+async function loadDashboardCosts() {
+    const month = document.getElementById('selectedMonth').value;
+    const products = document.getElementById('dashCostProducts').value;
+    try {
+        const resp = await fetch(`/api/dashboard/consumption-costs?month=${month}&products=${encodeURIComponent(products)}`);
+        const res = await resp.json();
+        const container = document.getElementById('dashboardCosts');
+        if (!res.success) return container.innerText = 'Error: ' + res.error;
+        container.innerHTML = '';
+        if (!res.data || res.data.length === 0) {
+            container.innerHTML = '<p>No consumption data for this month.</p>';
+            return;
+        }
+        res.data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'card';
+            let html = `<h4>${item.product}</h4>`;
+
+            // Raw Materials — API returns {ingName: [{kg_used, cost_per_kg, total_cost}, ...]}
+            html += `<p><strong>Total RM Cost: ₹${formatNumber(item.total_rm_cost, 2)}</strong></p>`;
+            const rmEntries = Object.entries(item.raw_materials || {});
+            if (rmEntries.length > 0) {
+                html += `<table><thead><tr><th>Raw Material</th><th>Kg Used</th><th>Cost/kg (₹)</th><th>Total (₹)</th></tr></thead><tbody>`;
+                for (const [rm, tiers] of rmEntries) {
+                    const tierArr = Array.isArray(tiers) ? tiers : [tiers];
+                    tierArr.forEach((t, i) => {
+                        html += `<tr>
+                            <td>${i === 0 ? `<strong>${rm}</strong>` : '<em style="color:#888;padding-left:1rem;">↳ same (diff lot)</em>'}</td>
+                            <td>${formatNumber(t.kg_used || 0, 4)}</td>
+                            <td>${formatNumber(t.cost_per_kg || 0, 2)}</td>
+                            <td>${formatNumber(t.total_cost || 0, 2)}</td>
+                        </tr>`;
+                    });
+                    if (tierArr.length > 1) {
+                        const sub = tierArr.reduce((s, t) => s + (t.total_cost || 0), 0);
+                        const kgSub = tierArr.reduce((s, t) => s + (t.kg_used || 0), 0);
+                        html += `<tr style="font-weight:bold;background:#f5f5f5;">
+                            <td><em>${rm} — subtotal</em></td>
+                            <td>${formatNumber(kgSub, 4)}</td><td></td>
+                            <td>${formatNumber(sub, 2)}</td>
+                        </tr>`;
+                    }
+                }
+                html += `</tbody></table>`;
+            } else {
+                html += `<p style="color:#888;">No raw material movements recorded.</p>`;
+            }
+
+            // Packaging — API returns {compName: [{qty_used, cost_per_unit, total_cost}, ...]}
+            html += `<p style="margin-top:1rem;"><strong>Total Packaging Cost: ₹${formatNumber(item.total_packaging_cost, 2)}</strong></p>`;
+            const pkgEntries = Object.entries(item.packaging || {});
+            if (pkgEntries.length > 0) {
+                html += `<table><thead><tr><th>Component</th><th>Qty Used</th><th>Cost/unit (₹)</th><th>Total (₹)</th></tr></thead><tbody>`;
+                for (const [comp, tiers] of pkgEntries) {
+                    const tierArr = Array.isArray(tiers) ? tiers : [tiers];
+                    tierArr.forEach((t, i) => {
+                        html += `<tr>
+                            <td>${i === 0 ? `<strong>${comp}</strong>` : '<em style="color:#888;padding-left:1rem;">↳ same (diff lot)</em>'}</td>
+                            <td>${formatNumber(t.qty_used || 0, 2)}</td>
+                            <td>${formatNumber(t.cost_per_unit || 0, 2)}</td>
+                            <td>${formatNumber(t.total_cost || 0, 2)}</td>
+                        </tr>`;
+                    });
+                    if (tierArr.length > 1) {
+                        const sub = tierArr.reduce((s, t) => s + (t.total_cost || 0), 0);
+                        const qtySub = tierArr.reduce((s, t) => s + (t.qty_used || 0), 0);
+                        html += `<tr style="font-weight:bold;background:#f5f5f5;">
+                            <td><em>${comp} — subtotal</em></td>
+                            <td>${formatNumber(qtySub, 2)}</td><td></td>
+                            <td>${formatNumber(sub, 2)}</td>
+                        </tr>`;
+                    }
+                }
+                html += `</tbody></table>`;
+            } else {
+                html += `<p style="color:#888;">No packaging movements recorded.</p>`;
+            }
+
+            html += `<p style="margin-top:0.75rem;font-size:1.05rem;"><strong>Overall Total: ₹${formatNumber(item.total_cost, 2)}</strong></p>`;
+            div.innerHTML = html;
+            container.appendChild(div);
+        });
+    } catch (err) {
+        showAlert('Error loading costs: ' + err.message, 'danger');
+    }
+}
+
+async function loadDashboardWastage() {
+    const month = document.getElementById('selectedMonth').value;
+    const products = document.getElementById('dashWastageProducts').value;
+    try {
+        const resp = await fetch(`/api/dashboard/wastage-report?month=${month}&products=${encodeURIComponent(products)}`);
+        const res = await resp.json();
+        const container = document.getElementById('dashboardWastage');
+        if (!res.success) return container.innerText = 'Error: ' + res.error;
+        container.innerHTML = '';
+        res.data.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'card';
+            let html = `<h4>${item.product}</h4>`;
+            html += `<p><strong>Total wastage (litres):</strong> ${item.total_wastage_litres}</p>`;
+            // Production wastage details
+            if (item.production_wastage && Object.keys(item.production_wastage).length > 0) {
+                const p = item.production_wastage;
+                html += `<h5>Production</h5><p>Planned: ${p.planned_kg} kg, Yield: ${p.actual_kg} kg, Loss: ${p.loss_kg} kg (${p.loss_litres} litres)</p>`;
+            }
+            // Filling wastage breakdown per pack size
+            if (item.filling_wastage && item.filling_wastage.length > 0) {
+                html += `<h5>Filling</h5><table><thead><tr><th>Pack Size (kg)</th><th>Poured (kg)</th><th>In Bottles (kg)</th><th>Waste (kg)</th><th>Waste (litres)</th><th>Bottle Diff</th><th>Bottle Diff (litres)</th></tr></thead><tbody>`;
+                item.filling_wastage.forEach(f => {
+                    html += `<tr><td>${f.pack_size_kg}</td><td>${f.poured_kg}</td><td>${f.in_bottles_kg}</td><td>${f.waste_kg}</td><td>${f.waste_litres}</td><td>${f.bottle_diff}</td><td>${f.bottle_diff_litres}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+            div.innerHTML = html;
+            container.appendChild(div);
+        });
+    } catch (err) {
+        showAlert('Error loading wastage: ' + err.message, 'danger');
+    }
+}
+
+// Auto-refresh every 60 seconds
+setInterval(loadMonthlyData, 60000);
+
+async function deleteAllData() {
+    const pwd = prompt('Enter admin password to delete all data:');
+    if (pwd === null) return; // cancelled
+    if (pwd !== 'geebee47') { alert('Incorrect password'); return; }
+    if (!confirm('Are you SURE? This will permanently delete all entered data and histories (schema preserved).')) return;
+    try {
+        const resp = await fetch('/api/admin/delete-all', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: pwd}) });
+        const res = await resp.json();
+        if (res.success) { alert(res.message); window.location.reload(); } else alert('Failed: ' + (res.error || 'unknown'));
+    } catch (err) { alert('Error: ' + err.message); }
+}
+</script>
+{% endblock %}

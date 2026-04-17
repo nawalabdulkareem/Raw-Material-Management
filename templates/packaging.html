@@ -1,0 +1,660 @@
+{% extends "base.html" %}
+{% block title %}Packaging Components - Manufacturing System{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📦 Packaging Components</h2>
+    <div style="margin-bottom:1rem;">
+        <button class="btn btn-primary" onclick="openAddModal()">➕ Add Component</button>
+        <button class="btn" onclick="loadComponents()">🔄 Refresh</button>
+    </div>
+    <div id="componentsTable"><p class="loading">Loading components...</p></div>
+</div>
+
+<!-- Movement History -->
+<div class="card" style="margin-top:2rem;">
+    <h2>📋 Packaging Movement History</h2>
+    <div style="margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;">
+        <div class="form-group" style="margin:0;">
+            <label>Filter by Component:</label>
+            <select id="movComponent" style="width:200px;"><option value="">All Components</option></select>
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label>Month:</label>
+            <input type="month" id="movMonth">
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label>Movement Type:</label>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.25rem;">
+                <label><input type="checkbox" class="mov-type-cb" value="IN" checked> IN</label>
+                <label><input type="checkbox" class="mov-type-cb" value="OUT" checked> OUT</label>
+                <label><input type="checkbox" class="mov-type-cb" value="DAMAGE" checked> DAMAGE</label>
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="loadHistory()">🔍 Filter</button>
+    </div>
+    <div id="movementHistory"><p class="loading">Loading...</p></div>
+</div>
+
+<!-- Add Component Modal -->
+<div id="addModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Add Packaging Component</h3>
+            <span class="close" onclick="closeModal('addModal')">&times;</span>
+        </div>
+        <form id="addForm" onsubmit="addComponent(event)">
+            <div class="form-group"><label>Component Name *</label><input type="text" id="addName" required></div>
+            <div class="form-group"><label>Initial Quantity</label><input type="number" step="0.01" onwheel="event.currentTarget.blur()" id="addQty" value="0"></div>
+            <div class="form-group"><label>Cost per Unit (₹)</label><input type="number" step="0.001" onwheel="event.currentTarget.blur()" id="addCost" value="0"></div>
+            <div class="form-group"><label>Supplier</label><input type="text" id="addSupplier"></div>
+            <div class="form-group"><label>Date</label><input type="date" id="addDate"></div>
+            <div class="form-group"><label>Notes</label><textarea id="addNotes" rows="2"></textarea></div>
+            <button type="submit" class="btn btn-primary">Add Component</button>
+            <button type="button" class="btn" onclick="closeModal('addModal')">Cancel</button>
+        </form>
+    </div>
+</div>
+
+<!-- Restock Modal (per-row, component pre-filled) -->
+<div id="restockModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Restock Component</h3>
+            <span class="close" onclick="closeModal('restockModal')">&times;</span>
+        </div>
+        <form id="restockForm" onsubmit="restockComponent(event)">
+            <input type="hidden" id="restockComponentName">
+            <div class="form-group">
+                <label>Component</label>
+                <input type="text" id="restockComponentDisplay" readonly style="background:#f5f5f5;font-weight:bold;">
+            </div>
+            <div class="form-group">
+                <label>Current Stock</label>
+                <input type="text" id="restockCurrentStock" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Quantity to Add *</label>
+                <input type="number" step="0.01" min="0.01" onwheel="event.currentTarget.blur()" id="restockQty" required>
+            </div>
+            <div class="form-group">
+                <label>Cost per Unit (₹) * <span style="color:#e74c3c;font-size:0.85rem;">Required for FIFO tracking</span></label>
+                <input type="number" step="0.001" min="0.001" onwheel="event.currentTarget.blur()" id="restockCostPerUnit" required>
+                <small id="restockCostHint" style="color:#888;display:block;margin-top:0.25rem;"></small>
+            </div>
+            <div class="form-group">
+                <label>Date *</label>
+                <input type="date" id="restockDate" required>
+            </div>
+            <div class="form-group">
+                <label>Supplier <span style="color:#888;font-size:0.85rem;">(leave blank to keep existing)</span></label>
+                <input type="text" id="restockSupplier">
+            </div>
+            <div class="form-group">
+                <label>Notes <span style="color:#888;font-size:0.85rem;">(leave blank for auto description)</span></label>
+                <textarea id="restockNotes" rows="2"></textarea>
+            </div>
+            <button type="submit" class="btn btn-success">✅ Restock</button>
+            <button type="button" class="btn" onclick="closeModal('restockModal')">Cancel</button>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Component Modal -->
+<div id="editModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Edit Component</h3>
+            <span class="close" onclick="closeModal('editModal')">&times;</span>
+        </div>
+        <form id="editForm" onsubmit="saveEdit(event)">
+            <input type="hidden" id="editComponentName">
+            <div class="form-group">
+                <label>Component</label>
+                <input type="text" id="editComponentDisplay" readonly style="background:#f5f5f5;font-weight:bold;">
+            </div>
+            <div class="form-group">
+                <label>Stock Quantity</label>
+                <input type="number" step="0.01" onwheel="event.currentTarget.blur()" id="editQty">
+            </div>
+            <div id="editLotSection" style="display:none;" class="form-group">
+                <label>Adjust Which Cost Batch? <span style="color:#e74c3c;font-size:0.85rem;">Required when changing quantity</span></label>
+                <select id="editLotSelect" style="width:100%;padding:0.4rem;font-size:0.9rem;">
+                    <option value="">— Select batch to adjust —</option>
+                </select>
+                <small style="color:#888;margin-top:0.25rem;display:block;">Stock by Price Tier will be updated for the selected batch.</small>
+            </div>
+            <div class="form-group"><label>Supplier</label><input type="text" id="editSupplier"></div>
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn" onclick="closeModal('editModal')">Cancel</button>
+        </form>
+    </div>
+</div>
+
+<!-- Damage Report Modal -->
+<div id="damageModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Report Damage</h3>
+            <span class="close" onclick="closeModal('damageModal')">&times;</span>
+        </div>
+        <form id="damageForm" onsubmit="submitDamage(event)">
+            <input type="hidden" id="damageComponentName">
+            <div class="form-group"><label>Component</label><input type="text" id="damageComponentDisplay" readonly style="background:#f5f5f5;"></div>
+            <div id="damageLotGroup" style="display:none;" class="form-group">
+                <label>Select Lot *</label>
+                <select id="damageLotSelect" style="width:100%;padding:0.4rem;"></select>
+                <small style="color:#888;">Multiple price tiers — pick which lot has the damaged stock.</small>
+            </div>
+            <div class="form-group"><label>Quantity Damaged *</label><input type="number" step="0.01" min="0.01" onwheel="event.currentTarget.blur()" id="damageQty" required></div>
+            <div class="form-group"><label>Date</label><input type="date" id="damageDate"></div>
+            <div class="form-group"><label>Notes</label><textarea id="damageNotes" rows="2"></textarea></div>
+            <button type="submit" class="btn btn-danger">Report Damage</button>
+            <button type="button" class="btn" onclick="closeModal('damageModal')">Cancel</button>
+        </form>
+    </div>
+</div>
+
+<!-- Requisition Form Modal -->
+<div id="requisitionModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="reqModalTitle">Generate Requisition Form</h3>
+            <span class="close" onclick="closeModal('requisitionModal')">&times;</span>
+        </div>
+        <form id="requisitionForm" onsubmit="submitRequisition(event)">
+            <input type="hidden" id="reqItemName">
+            <input type="hidden" id="reqItemType" value="packaging">
+            <div class="form-group">
+                <label>Component</label>
+                <input type="text" id="reqItemDisplay" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Current Stock</label>
+                <input type="text" id="reqCurrentStock" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Cost <span style="color:#888;font-size:0.85rem;">(autofilled from last restock — editable, e.g. 14/piece)</span></label>
+                <input type="text" id="reqCost" placeholder="e.g. 14/piece or 3.5/unit">
+            </div>
+            <div class="form-group">
+                <label>Requisition Number</label>
+                <input type="text" id="reqNumber" placeholder="e.g. REQ-001">
+            </div>
+            <div class="form-group">
+                <label>Department</label>
+                <input type="text" id="reqDepartment" placeholder="e.g. Production">
+            </div>
+            <div class="form-group">
+                <label>Count / Quantity to Purchase</label>
+                <input type="number" id="reqCount" step="0.001" placeholder="e.g. 500">
+            </div>
+            <div class="form-group">
+                <label>Purpose</label>
+                <input type="text" id="reqPurpose" placeholder="e.g. Monthly production run">
+            </div>
+            <div class="form-group">
+                <label>Status</label>
+                <input type="text" id="reqStatus" placeholder="e.g. Urgent / Moderate">
+            </div>
+            <div class="form-group">
+                <label>Prepared By</label>
+                <input type="text" id="reqPreparedBy" value="Akshay">
+            </div>
+            <div style="margin-top:1.5rem;">
+                <button type="submit" class="btn" style="background:#8e44ad;color:#fff;">📋 Download Requisition Form</button>
+                <button type="button" class="btn" onclick="closeModal('requisitionModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+let components = [];
+let lotSummaryCache = {};
+
+async function loadComponents() {
+    try {
+        const [compRes, lotRes] = await Promise.all([
+            fetch('/api/packaging/components').then(r => r.json()),
+            fetch('/api/packaging/lot-summary').then(r => r.json()).catch(() => ({success:false, data:{}}))
+        ]);
+        if (!compRes.success) { showAlert('Error loading components: ' + compRes.error, 'danger'); return; }
+        components = compRes.data;
+        lotSummaryCache = (lotRes.success && lotRes.data) ? lotRes.data : {};
+        displayComponents();
+        updateMovementComponentDropdown();
+    } catch (error) {
+        showAlert('Error loading components: ' + error.message, 'danger');
+    }
+}
+
+function displayComponents() {
+    const container = document.getElementById('componentsTable');
+    if (components.length === 0) {
+        container.innerHTML = '<p>No packaging components yet. Click "Add Component" to start.</p>';
+        return;
+    }
+
+    let html = `<div style="overflow-x:auto;"><table><thead><tr>
+        <th>Component Name</th>
+        <th>Current Qty</th>
+        <th>Supplier</th>
+        <th>Stock by Price Tier</th>
+        <th>Current Stock Cost</th>
+        <th>Actions</th>
+    </tr></thead><tbody>`;
+
+    components.forEach(comp => {
+        const lots = lotSummaryCache[comp.component_name] || [];
+
+        let tierHtml = '';
+        if (lots.length === 0) {
+            tierHtml = `<span style="color:#999;font-size:0.85rem;">₹${formatNumber(comp.cost_per_unit||0,2)}/unit <em>(no batches)</em></span>`;
+        } else {
+            tierHtml = lots.map((l, i) =>
+                `<div style="white-space:nowrap;font-size:0.85rem;padding:1px 0;${i>0?'border-top:1px dashed #eee;':''}">
+                    ${formatNumber(l.qty_remaining,2)} @ <strong>₹${formatNumber(l.unit_cost,2)}/unit</strong>
+                    <span style="color:#aaa;"> (${l.received_date||'?'})</span>
+                 </div>`
+            ).join('');
+        }
+
+        let costHtml = '';
+        if (lots.length > 0) {
+            const next = lots[0];
+            costHtml = `<strong style="color:#2c7be5;">₹${formatNumber(next.unit_cost,2)}/unit</strong>`;
+            if (lots.length > 1) {
+                const totalQty = lots.reduce((s,l) => s + l.qty_remaining, 0);
+                const avgCost = lots.reduce((s,l) => s + l.unit_cost * l.qty_remaining, 0) / (totalQty||0.0001);
+                costHtml += `<br><small style="color:#888;">avg ₹${formatNumber(avgCost,2)} · ${lots.length} batches</small>`;
+            }
+        } else {
+            costHtml = `<span style="color:#999;">₹${formatNumber(comp.cost_per_unit||0,2)}/unit</span>`;
+        }
+
+        const escName = comp.component_name.replace(/'/g, "\\'");
+        const currentCost = lots.length > 0 ? lots[0].unit_cost : (comp.cost_per_unit || 0);
+
+        html += `<tr>
+            <td><strong>${comp.component_name}</strong></td>
+            <td>${formatNumber(comp.current_qty, 2)}</td>
+            <td>${comp.supplier || '—'}</td>
+            <td>${tierHtml}</td>
+            <td>${costHtml}</td>
+            <td>
+                <button class="btn btn-success btn-sm" onclick="openRestockModal('${escName}', ${comp.current_qty}, ${currentCost}, '${(comp.supplier||'').replace(/'/g,"\\'")}')">📦 Restock</button>
+                <button class="btn btn-sm" onclick="editComponent('${escName}')">Edit</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteComponent(${comp.id})">Delete</button>
+                <button class="btn btn-sm btn-warning" onclick="openDamageModal('${escName}', ${comp.current_qty})">Report Damage</button>
+                <button class="btn btn-sm" style="background:#8e44ad;color:#fff;" onclick="openRequisitionModal('${escName}', '${formatNumber(comp.current_qty,2)} units')">📋 Requisition</button>
+            </td>
+        </tr>`;
+    });
+
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+function updateMovementComponentDropdown() {
+    const sel = document.getElementById('movComponent');
+    const currentVal = sel.value;
+    sel.innerHTML = '<option value="">All Components</option>';
+    components.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.component_name;
+        opt.textContent = c.component_name;
+        sel.appendChild(opt);
+    });
+    if (currentVal) sel.value = currentVal;
+}
+
+function getSelectedMovementTypes() {
+    return Array.from(document.querySelectorAll('.mov-type-cb:checked')).map(cb => cb.value).join(',');
+}
+
+async function deleteComponent(id) {
+    if (!confirm('Delete this component? Removes it and all movement history. Cannot be undone.')) return;
+    try {
+        const text = await fetch(`/api/packaging/components/delete/${id}`, {method:'DELETE'}).then(r => r.text());
+        let res;
+        try { res = JSON.parse(text); } catch(e) { showAlert('Delete failed: unexpected server response', 'danger'); return; }
+        if (res.success) { showAlert(res.message, 'success'); loadComponents(); loadHistory(); }
+        else showAlert(res.error || 'Delete failed', 'danger');
+    } catch (err) { showAlert('Error deleting: ' + err.message, 'danger'); }
+}
+
+function openAddModal() {
+    document.getElementById('addForm').reset();
+    document.getElementById('addDate').value = new Date().toISOString().split('T')[0];
+    openModal('addModal');
+}
+
+// Per-row restock: pre-fills component name and cost hint
+function openRestockModal(compName, currentQty, currentCost, currentSupplier) {
+    document.getElementById('restockComponentName').value = compName;
+    document.getElementById('restockComponentDisplay').value = compName;
+    document.getElementById('restockCurrentStock').value = formatNumber(currentQty, 2) + ' units';
+    document.getElementById('restockQty').value = '';
+    document.getElementById('restockCostPerUnit').value = '';
+    document.getElementById('restockDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('restockSupplier').value = '';
+    document.getElementById('restockNotes').value = '';
+    const hint = document.getElementById('restockCostHint');
+    hint.textContent = currentCost > 0 ? `Current price: ₹${formatNumber(currentCost, 2)}/unit — enter new price if it changed` : 'Enter cost per unit';
+    openModal('restockModal');
+}
+
+async function editComponent(name) {
+    const comp = components.find(c => c.component_name === name);
+    if (!comp) return;
+    document.getElementById('editComponentName').value = name;
+    document.getElementById('editComponentDisplay').value = name;
+    document.getElementById('editQty').value = comp.current_qty;
+    document.getElementById('editSupplier').value = comp.supplier || '';
+
+    // Populate lot selector
+    const lotSection = document.getElementById('editLotSection');
+    const lotSelect = document.getElementById('editLotSelect');
+    let lots = [];
+    try {
+        const res = await fetch('/api/packaging/lots/' + encodeURIComponent(name)).then(r => r.json());
+        lots = (res.success && res.data) ? res.data : [];
+    } catch(e) { lots = []; }
+
+    lotSelect.innerHTML = '<option value="">— Select batch to adjust —</option>';
+    if (lots.length > 0) {
+        lots.forEach(l => {
+            const opt = document.createElement('option');
+            opt.value = l.id;
+            opt.textContent = `${formatNumber(l.qty_remaining,2)} units @ ₹${formatNumber(l.unit_cost,2)}/unit`;
+            lotSelect.appendChild(opt);
+        });
+        if (lots.length === 1) lotSelect.value = lots[0].id;
+        lotSection.style.display = '';
+    } else {
+        lotSection.style.display = 'none';
+    }
+
+    openModal('editModal');
+}
+
+async function openDamageModal(name, qty) {
+    document.getElementById('damageComponentName').value = name;
+    document.getElementById('damageComponentDisplay').value = name;
+    document.getElementById('damageQty').value = '';
+    document.getElementById('damageDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('damageNotes').value = '';
+
+    var lotGroup = document.getElementById('damageLotGroup');
+    var lotSelect = document.getElementById('damageLotSelect');
+    while (lotSelect.firstChild) lotSelect.removeChild(lotSelect.firstChild);
+    lotSelect.required = false;
+
+    // Fetch individual lots with real IDs from the backend
+    var lots = [];
+    try {
+        var res = await fetch('/api/packaging/lots/' + encodeURIComponent(name)).then(r => r.json());
+        if (res.success) lots = res.data || [];
+    } catch(e) { lots = []; }
+
+    if (lots.length > 1) {
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = '-- Select which lot has the damage --';
+        lotSelect.appendChild(placeholder);
+        lots.forEach(function(l) {
+            var opt = document.createElement('option');
+            opt.value = l.id;
+            opt.textContent = 'Lot #' + l.id + ': ' + formatNumber(l.qty_remaining, 2) + ' units @ ₹' + formatNumber(l.unit_cost, 2) + '/unit' + (l.received_date ? ' (received ' + l.received_date + ')' : '');
+            lotSelect.appendChild(opt);
+        });
+        lotSelect.required = true;
+        lotGroup.style.display = '';
+    } else if (lots.length === 1) {
+        var opt = document.createElement('option');
+        opt.value = lots[0].id;
+        opt.textContent = 'Lot #' + lots[0].id + ': ' + formatNumber(lots[0].qty_remaining, 2) + ' units @ ₹' + formatNumber(lots[0].unit_cost, 2) + '/unit' + (lots[0].received_date ? ' (received ' + lots[0].received_date + ')' : '');
+        opt.selected = true;
+        lotSelect.appendChild(opt);
+        lotGroup.style.display = '';
+    } else {
+        lotGroup.style.display = 'none';
+    }
+
+    openModal('damageModal');
+}
+
+async function addComponent(event) {
+    event.preventDefault();
+    const data = {
+        component_name: document.getElementById('addName').value,
+        quantity: parseFloat(document.getElementById('addQty').value) || 0,
+        cost_per_unit: parseFloat(document.getElementById('addCost').value) || 0,
+        supplier: document.getElementById('addSupplier').value || '',
+        date: document.getElementById('addDate').value,
+        notes: document.getElementById('addNotes').value
+    };
+    try {
+        const result = await fetch('/api/packaging/components/add', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        }).then(r => r.json());
+        if (result.success) { showAlert(result.message, 'success'); closeModal('addModal'); loadComponents(); loadHistory(); }
+        else showAlert(result.error, 'danger');
+    } catch (error) { showAlert('Error adding component: ' + error.message, 'danger'); }
+}
+
+async function restockComponent(event) {
+    event.preventDefault();
+    const cost = parseFloat(document.getElementById('restockCostPerUnit').value);
+    if (!cost || cost <= 0) { showAlert('Cost per unit is required for FIFO tracking', 'warning'); return; }
+    const compName = document.getElementById('restockComponentName').value;
+    if (!compName) { showAlert('No component selected', 'warning'); return; }
+    const data = {
+        component_name: compName,
+        quantity: parseFloat(document.getElementById('restockQty').value),
+        unit_cost: cost,
+        date: document.getElementById('restockDate').value,
+        supplier: document.getElementById('restockSupplier').value || '',
+        notes: document.getElementById('restockNotes').value || ''
+    };
+    try {
+        const result = await fetch('/api/packaging/components/restock', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        }).then(r => r.json());
+        if (result.success) {
+            showAlert(result.message, 'success');
+            closeModal('restockModal');
+            loadComponents();
+            loadHistory();
+        } else showAlert(result.error, 'danger');
+    } catch (error) { showAlert('Error restocking: ' + error.message, 'danger'); }
+}
+
+async function saveEdit(event) {
+    event.preventDefault();
+    const name = document.getElementById('editComponentName').value;
+    const newQty = document.getElementById('editQty').value;
+    const lotSelect = document.getElementById('editLotSelect');
+    const lotId = (lotSelect && lotSelect.value) ? parseInt(lotSelect.value) : null;
+
+    // If qty changed and multiple lots exist, require lot selection
+    const comp = components.find(c => c.component_name === name);
+    if (comp && newQty !== '' && Math.abs(parseFloat(newQty) - parseFloat(comp.current_qty)) > 0.001) {
+        const lotSection = document.getElementById('editLotSection');
+        if (lotSection.style.display !== 'none' && !lotId) {
+            showAlert('Please select which cost batch to adjust.', 'warning');
+            return;
+        }
+    }
+
+    const data = { component_name: name, supplier: document.getElementById('editSupplier').value };
+    if (newQty !== '') data.current_qty = parseFloat(newQty);
+    if (lotId) data.lot_id = lotId;
+
+    try {
+        const text = await fetch('/api/packaging/components/update', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        }).then(r => r.text());
+        let result;
+        try { result = JSON.parse(text); } catch(e) { showAlert('Update failed: unexpected server response', 'danger'); return; }
+        if (result.success) { showAlert('Component updated', 'success'); closeModal('editModal'); loadComponents(); loadHistory(); }
+        else showAlert(result.error, 'danger');
+    } catch (error) { showAlert('Error updating: ' + error.message, 'danger'); }
+}
+
+async function submitDamage(event) {
+    event.preventDefault();
+    var compName = document.getElementById('damageComponentName').value;
+    var lotSelect = document.getElementById('damageLotSelect');
+    var lotId = (lotSelect && lotSelect.value) ? parseInt(lotSelect.value) : null;
+    if (lotSelect && lotSelect.required && !lotId) {
+        showAlert('Please select which lot contains the damaged items.', 'warning');
+        return;
+    }
+    const data = {
+        component_name: compName,
+        quantity: parseFloat(document.getElementById('damageQty').value),
+        date: document.getElementById('damageDate').value,
+        notes: document.getElementById('damageNotes').value
+    };
+    if (lotId) data.lot_id = lotId;
+    try {
+        const result = await fetch('/api/packaging/report-damage', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        }).then(r => r.json());
+        if (result.success) { showAlert(result.message, 'success'); closeModal('damageModal'); loadComponents(); loadHistory(); }
+        else showAlert(result.error, 'danger');
+    } catch (error) { showAlert('Error reporting damage: ' + error.message, 'danger'); }
+}
+
+async function loadHistory() {
+    try {
+        const month = document.getElementById('movMonth')?.value || '';
+        const types = getSelectedMovementTypes();
+        const comp = document.getElementById('movComponent')?.value || '';
+        let url = `/api/packaging/movements?components=${encodeURIComponent(comp)}`;
+        if (month) url += `&month=${month}`;
+        if (types) url += `&types=${encodeURIComponent(types)}`;
+        const result = await fetch(url).then(r => r.json());
+        const container = document.getElementById('movementHistory');
+
+        if (result.success && result.data.length > 0) {
+            const compMap = {};
+            components.forEach(c => { compMap[c.component_name] = parseFloat(c.current_qty) || 0; });
+
+            let html = `<div style="overflow-x:auto;"><table><thead><tr>
+                <th>Date</th><th>Component</th><th>Type</th><th>Quantity</th>
+                <th>Cost/Unit (₹)</th><th>Remaining After</th><th>Description</th>
+            </tr></thead><tbody>`;
+
+            result.data.forEach(mov => {
+                const compName = mov.component_name;
+                let currentQty = compMap.hasOwnProperty(compName) ? compMap[compName] : 0;
+                const remainingAfter = currentQty;
+                if (mov.movement_type === 'IN') compMap[compName] = currentQty - (parseFloat(mov.quantity)||0);
+                else compMap[compName] = currentQty + (parseFloat(mov.quantity)||0);
+
+                const costDisp = (mov.unit_cost && mov.unit_cost > 0) ? `₹${formatNumber(mov.unit_cost, 2)}` : '—';
+                const typeColor = mov.movement_type === 'IN' ? '#d4edda' : mov.movement_type === 'DAMAGE' ? '#fff3cd' : '#f8d7da';
+
+                // Build a meaningful description based on movement type
+                let description;
+                if (mov.movement_type === 'IN' && mov.reference_type === 'Restock') {
+                    const costStr = (mov.unit_cost && mov.unit_cost > 0) ? ` at ₹${formatNumber(mov.unit_cost, 2)}/unit` : '';
+                    description = `${formatNumber(mov.quantity, 2)} units of ${mov.component_name} bought${costStr}`;
+                    if (mov.notes && mov.notes !== 'Restocked') description += ` — ${mov.notes}`;
+                } else if (mov.movement_type === 'DAMAGE') {
+                    const costStr = (mov.unit_cost && mov.unit_cost > 0) ? ` from lot at ₹${formatNumber(mov.unit_cost, 2)}/unit` : '';
+                    description = `${formatNumber(mov.quantity, 2)} units of ${mov.component_name} damaged${costStr}`;
+                    if (mov.notes && mov.notes !== 'Reported damage') description += ` — ${mov.notes}`;
+                } else {
+                    description = mov.notes || '—';
+                }
+
+                html += `<tr>
+                    <td>${mov.date}</td>
+                    <td><strong>${mov.component_name}</strong></td>
+                    <td><span style="background:${typeColor};padding:0.2rem 0.5rem;border-radius:3px;">${mov.movement_type}</span></td>
+                    <td>${formatNumber(mov.quantity, 2)}</td>
+                    <td>${costDisp}</td>
+                    <td>${formatNumber(remainingAfter, 2)}</td>
+                    <td style="font-size:0.9rem;">${description}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No movement history yet.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading history: ' + error.message, 'danger');
+    }
+}
+
+function openRequisitionModal(componentName, currentStock) {
+    document.getElementById('reqItemName').value = componentName;
+    document.getElementById('reqItemType').value = 'packaging';
+    document.getElementById('reqItemDisplay').value = componentName;
+    document.getElementById('reqCurrentStock').value = currentStock;
+    document.getElementById('reqModalTitle').textContent = 'Requisition Form — ' + componentName;
+    document.getElementById('reqNumber').value = '';
+    document.getElementById('reqDepartment').value = '';
+    document.getElementById('reqCount').value = '';
+    document.getElementById('reqPurpose').value = '';
+    document.getElementById('reqStatus').value = '';
+    document.getElementById('reqPreparedBy').value = 'Akshay';
+    // Autofill cost from most recent lot (last entry = newest restock)
+    const lots = lotSummaryCache[componentName] || [];
+    const lastCost = lots.length > 0 ? lots[lots.length - 1].unit_cost : '';
+    document.getElementById('reqCost').value = lastCost ? String(lastCost) : '';
+    openModal('requisitionModal');
+}
+
+async function submitRequisition(e) {
+    e.preventDefault();
+    const payload = {
+        item_name:   document.getElementById('reqItemName').value,
+        item_type:   document.getElementById('reqItemType').value,
+        number:      document.getElementById('reqNumber').value,
+        department:  document.getElementById('reqDepartment').value,
+        count:       document.getElementById('reqCount').value,
+        purpose:     document.getElementById('reqPurpose').value,
+        status:      document.getElementById('reqStatus').value,
+        prepared_by: document.getElementById('reqPreparedBy').value,
+        cost:        document.getElementById('reqCost').value,
+    };
+    try {
+        const resp = await fetch('/api/generate-requisition', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showAlert('Error: ' + (err.error || resp.statusText), 'danger');
+            return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Requisition_' + payload.item_name.replace(/\s+/g, '_') + '.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        closeModal('requisitionModal');
+        showAlert('Requisition form downloaded!', 'success');
+    } catch (err) {
+        showAlert('Error generating form: ' + err.message, 'danger');
+    }
+}
+
+// Initialize
+loadComponents();
+loadHistory();
+document.getElementById('movMonth').value = new Date().toISOString().slice(0,7);
+</script>
+{% endblock %}

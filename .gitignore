@@ -1,0 +1,14 @@
+manufacturing.db
+*.json
+config.py
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+*.egg-info/
+dist/
+build/

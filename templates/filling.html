@@ -1,0 +1,626 @@
+{% extends "base.html" %}
+{% block title %}Filling Operations - Manufacturing System V2{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>🍶 Filling Operations</h2>
+    <form id="fillingForm" onsubmit="confirmFilling(event)">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Date *</label>
+                <input type="date" id="fillDate" required>
+            </div>
+            <div class="form-group">
+                <label>Product *</label>
+                <select id="fillProduct" required onchange="loadBatches()">
+                    <option value="">Select Product</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Batch Number *</label>
+                <select id="fillBatch" onchange="clearCalculations()">
+                    <option value="">Select Batch</option>
+                </select>
+                <input type="text" id="fillBatchLegacy" placeholder="Enter previous batch number" style="display:none;margin-top:0.4rem;">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Pack Size (kg) *</label>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()" id="fillPackSize" required placeholder="e.g., 0.050, 0.100, 0.200">
+            </div>
+            <div class="form-group">
+                <label>Bulk Used (kg) *</label>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()" id="fillBulkUsed" required>
+            </div>
+            <div class="form-group">
+                <label>Bulk Poured into Machine (kg) *</label>
+                <input type="number" step="0.0001" id="fillBulkPoured" required>
+                <small>Amount actually poured (usually more than bulk used due to wastage)</small>
+            </div>
+        </div>
+        <button type="button" class="btn btn-warning" onclick="calculateTheoretical()">📊 Calculate Theoretical Bottles</button>
+        <div id="theoreticalSection" style="display:none;margin:1rem 0;padding:1rem;background:#f0f8ff;border-radius:4px;">
+            <h4>Batch Information:</h4>
+            <p><strong>Total Yield:</strong> <span id="totalYield">0</span> kg</p>
+            <p><strong>Already Filled:</strong> <span id="alreadyFilled">0</span> kg</p>
+            <p><strong>Remaining:</strong> <span id="remaining">0</span> kg</p>
+            <p style="font-size:1.2rem;color:#27ae60;"><strong>Theoretical Bottles:</strong> <span id="theoretical">0</span></p>
+        </div>
+        <div class="form-group">
+            <label>Actual Bottles Filled *</label>
+            <input type="number" step="1" onwheel="event.currentTarget.blur()" id="fillActualBottles" required>
+        </div>
+        <div id="differenceSection" style="display:none;margin:1rem 0;padding:1rem;border-radius:4px;">
+            <h4>Difference: <span id="differenceValue">0</span> bottles (<span id="differencePerc">0</span>%)</h4>
+        </div>
+        <h3>Packaging Components Used</h3>
+        <div id="packagingComponents">
+            <div class="packaging-row" style="display:flex;gap:1rem;margin-bottom:0.5rem;align-items:center;">
+                <select class="pkg-component" style="flex:2;"><option value="">Select Component</option></select>
+                <input type="number" step="0.001" class="pkg-quantity" placeholder="Quantity" style="flex:1;" onwheel="event.currentTarget.blur()">
+                <button type="button" class="btn btn-danger" onclick="removePackagingRow(this)" style="padding:0.4rem 0.8rem;">Remove</button>
+            </div>
+        </div>
+        <button type="button" class="btn btn-success" onclick="addPackagingRow()">+ Add Component</button>
+        <div class="form-group" style="margin-top:1rem;">
+            <label>Notes</label>
+            <textarea id="fillNotes" rows="2"></textarea>
+        </div>
+        <div style="margin-top:1.5rem;">
+            <button type="submit" class="btn btn-primary">✓ Confirm Filling</button>
+            <button type="button" class="btn" onclick="resetForm()">Clear</button>
+        </div>
+        <div class="form-group" style="margin-top:0.5rem;">
+            <label><input type="checkbox" id="isLegacyToggle" onchange="toggleLegacyMode()"> &nbsp;Previous Batch (Legacy Fill — no production record)</label>
+        </div>
+    </form>
+</div>
+
+<!-- Filling History (includes per-row Report Damage + Record Sample buttons) -->
+<div class="card">
+    <h3>📋 Filling History</h3>
+    <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap;">
+        <label>Month:</label>
+        <input type="month" id="fillMonth" value="">
+        <label>Products (optional):</label>
+        <input id="fillHistoryProduct" type="text" placeholder="e.g. Product A, Product B" style="min-width:200px;">
+        <label>Status:</label>
+        <select id="fillStatus">
+            <option value="">(all)</option>
+            <option value="sample">Has Samples</option>
+            <option value="damage">Has Damages</option>
+            <option value="both">Has Both</option>
+            <option value="none">Neither</option>
+        </select>
+        <button class="btn btn-primary" onclick="loadHistory(); loadCurrentStock()">Filter</button>
+    </div>
+    <div id="fillingHistory"></div>
+</div>
+
+<!-- Sample History Section -->
+<div class="card">
+    <h3>🧪 Sample History</h3>
+    <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap;">
+        <label>Month:</label>
+        <input type="month" id="sampleMonth">
+        <button class="btn btn-primary" onclick="loadSampleHistory()">Filter</button>
+    </div>
+    <div id="sampleHistory"><p class="loading">Loading...</p></div>
+</div>
+
+<!-- Filling Damage History Section -->
+<div class="card">
+    <h3>💥 Filling Damage History</h3>
+    <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap;">
+        <label>Month:</label>
+        <input type="month" id="damageHistoryMonth">
+        <button class="btn btn-primary" onclick="loadDamageHistory()">Filter</button>
+    </div>
+    <div id="fillingDamageHistory"><p class="loading">Loading...</p></div>
+</div>
+
+<!-- Record Sample Modal (triggered from per-row button) -->
+<div id="sampleModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Record Sample</h3>
+            <span class="close" onclick="closeModal('sampleModal')">&times;</span>
+        </div>
+        <form id="sampleForm" onsubmit="submitSample(event)">
+            <input type="hidden" id="sampleProductHidden">
+            <input type="hidden" id="sampleBatchHidden">
+            <input type="hidden" id="samplePackSizeHidden">
+            <div class="form-group">
+                <label>Product</label>
+                <input type="text" id="sampleProductDisplay" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Batch</label>
+                <input type="text" id="sampleBatchDisplay" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Pack Size (kg)</label>
+                <input type="text" id="samplePackSizeDisplay" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Date *</label>
+                <input type="date" id="sampleDate" required>
+            </div>
+            <div class="form-group">
+                <label>Quantity (samples) *</label>
+                <input type="number" step="1" min="1" id="sampleQty" required onwheel="event.currentTarget.blur()">
+            </div>
+            <div class="form-group">
+                <label>Reason</label>
+                <input type="text" id="sampleReason" placeholder="e.g. Quality check, Customer sample">
+            </div>
+            <button type="submit" class="btn btn-primary">Record Sample</button>
+            <button type="button" class="btn" onclick="closeModal('sampleModal')">Cancel</button>
+        </form>
+    </div>
+</div>
+
+<script>
+let allBatches = [];
+let packagingComponents = [];
+
+async function loadProducts() {
+    const response = await fetch('/api/products');
+    const result = await response.json();
+    const select = document.getElementById('fillProduct');
+    select.innerHTML = '<option value="">Select Product</option>';
+    if (result.success) {
+        result.data.forEach(p => {
+            select.innerHTML += `<option value="${p.name}">${p.name}</option>`;
+        });
+        updateFillHistoryProductDropdown();
+    }
+}
+
+async function loadBatches() {
+    const product = document.getElementById('fillProduct').value;
+    const batchSelect = document.getElementById('fillBatch');
+    batchSelect.innerHTML = '<option value="">Select Batch</option>';
+    if (!product) return;
+    try {
+        const result = await fetch('/api/bulk-production/history').then(r => r.json());
+        if (result.success) {
+            allBatches = result.data.filter(b => b.product_name === product);
+            allBatches.forEach(batch => {
+                batchSelect.innerHTML += `<option value="${batch.batch_number}">${batch.batch_number} (${batch.actual_yield_kg} kg)</option>`;
+            });
+        }
+    } catch (error) {
+        showAlert('Error loading batches: ' + error.message, 'danger');
+    }
+}
+
+async function loadPackagingComponents() {
+    const result = await fetch('/api/packaging/components').then(r => r.json());
+    if (result.success) {
+        packagingComponents = result.data;
+        updatePackagingDropdowns();
+    }
+}
+
+function updatePackagingDropdowns() {
+    document.querySelectorAll('.pkg-component').forEach(select => {
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">Select Component</option>';
+        packagingComponents.forEach(comp => {
+            select.innerHTML += `<option value="${comp.component_name}">${comp.component_name} (${comp.current_qty} available)</option>`;
+        });
+        select.value = currentValue;
+    });
+}
+
+function updateFillHistoryProductDropdown() {
+    const sel = document.getElementById('fillHistoryProduct');
+    if (!sel || sel.tagName !== 'SELECT') return;
+    sel.innerHTML = '<option value="">(all)</option>';
+    const prodSel = document.getElementById('fillProduct');
+    if (!prodSel) return;
+    Array.from(prodSel.options).forEach(o => {
+        if (o.value) sel.innerHTML += `<option value="${o.value}">${o.value}</option>`;
+    });
+}
+
+function addPackagingRow() {
+    const container = document.getElementById('packagingComponents');
+    const newRow = document.createElement('div');
+    newRow.className = 'packaging-row';
+    newRow.style.cssText = 'display:flex;gap:1rem;margin-bottom:0.5rem;align-items:center;';
+    newRow.innerHTML = `
+        <select class="pkg-component" style="flex:2;"><option value="">Select Component</option></select>
+        <input type="number" step="0.001" class="pkg-quantity" placeholder="Quantity" style="flex:1;" onwheel="event.currentTarget.blur()">
+        <button type="button" class="btn btn-danger" onclick="removePackagingRow(this)" style="padding:0.4rem 0.8rem;">Remove</button>
+    `;
+    container.appendChild(newRow);
+    updatePackagingDropdowns();
+}
+
+function removePackagingRow(button) { button.parentElement.remove(); }
+function clearCalculations() {
+    document.getElementById('theoreticalSection').style.display = 'none';
+    document.getElementById('differenceSection').style.display = 'none';
+}
+
+async function calculateTheoretical() {
+    const batchNumber = document.getElementById('fillBatch').value;
+    const packSize = document.getElementById('fillPackSize').value;
+    if (!batchNumber || !packSize) { showAlert('Please select batch and enter pack size', 'warning'); return; }
+    try {
+        const bulkPoured = parseFloat(document.getElementById('fillBulkPoured').value) || '';
+        const result = await fetch('/api/filling/calculate-theoretical', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({batch_number: batchNumber, pack_size_kg: parseFloat(packSize), bulk_poured_kg: bulkPoured})
+        }).then(r => r.json());
+        if (result.success) {
+            const data = result.data;
+            document.getElementById('totalYield').textContent = formatNumber(data.total_yield_kg, 3);
+            document.getElementById('alreadyFilled').textContent = formatNumber(data.already_used_kg, 3);
+            document.getElementById('remaining').textContent = formatNumber(data.remaining_kg, 3);
+            document.getElementById('theoretical').textContent = data.theoretical_bottles;
+            document.getElementById('theoreticalSection').style.display = 'block';
+        } else {
+            showAlert(result.error, 'danger');
+        }
+    } catch (error) { showAlert('Error calculating: ' + error.message, 'danger'); }
+}
+
+document.getElementById('fillActualBottles').addEventListener('input', function() {
+    const theoretical = parseInt(document.getElementById('theoretical').textContent) || 0;
+    const actual = parseInt(this.value) || 0;
+    if (theoretical > 0 && actual > 0) {
+        const diff = actual - theoretical;
+        const diffPerc = (diff / theoretical * 100);
+        document.getElementById('differenceValue').textContent = (diff >= 0 ? '+' : '') + diff;
+        document.getElementById('differencePerc').textContent = formatNumber(diffPerc, 2);
+        document.getElementById('differenceSection').style.display = 'block';
+        document.getElementById('differenceSection').style.background = diff >= 0 ? '#d4edda' : '#f8d7da';
+        document.getElementById('differenceSection').style.color = diff >= 0 ? '#155724' : '#721c24';
+    }
+});
+
+async function confirmFilling(event) {
+    event.preventDefault();
+    const packagingUsage = [];
+    document.querySelectorAll('.packaging-row').forEach(row => {
+        const component = row.querySelector('.pkg-component').value;
+        const quantity = parseFloat(row.querySelector('.pkg-quantity').value) || 0;
+        if (component && quantity > 0) packagingUsage.push({component_name: component, quantity: quantity});
+    });
+    if (packagingUsage.length === 0) {
+        if (!confirm('No packaging components entered. Continue anyway?')) return;
+    }
+    const data = {
+        date: document.getElementById('fillDate').value,
+        product_name: document.getElementById('fillProduct').value,
+        batch_number: document.getElementById('isLegacyToggle').checked
+            ? document.getElementById('fillBatchLegacy').value
+            : document.getElementById('fillBatch').value,
+        is_legacy: document.getElementById('isLegacyToggle').checked,
+        pack_size_kg: parseFloat(document.getElementById('fillPackSize').value),
+        bulk_used_kg: parseFloat(document.getElementById('fillBulkUsed').value),
+        bulk_poured_kg: parseFloat(document.getElementById('fillBulkPoured').value),
+        actual_bottles_filled: parseInt(document.getElementById('fillActualBottles').value),
+        packaging_usage: packagingUsage,
+        notes: document.getElementById('fillNotes').value
+    };
+    try {
+        const result = await fetch('/api/filling/confirm', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        }).then(r => r.json());
+        if (result.success) {
+            const d = result.data;
+            const diffSign = d.bottles_diff >= 0 ? '+' : '';
+            showAlert(`Filling recorded!\nDifference: ${diffSign}${d.bottles_diff} bottles (${d.bottles_diff_percentage}%)`, 'success');
+            resetForm();
+            loadHistory();
+            loadCurrentStock();
+            loadPackagingComponents();
+        } else {
+            showAlert(result.error, 'danger');
+        }
+    } catch (error) { showAlert('Error confirming filling: ' + error.message, 'danger'); }
+}
+
+function resetForm() {
+    document.getElementById('fillingForm').reset();
+    document.getElementById('fillDate').value = new Date().toISOString().split('T')[0];
+    clearCalculations();
+    document.getElementById('fillBatch').innerHTML = '<option value="">Select Batch</option>';
+    document.getElementById('packagingComponents').innerHTML = `
+        <div class="packaging-row" style="display:flex;gap:1rem;margin-bottom:0.5rem;align-items:center;">
+            <select class="pkg-component" style="flex:2;"><option value="">Select Component</option></select>
+            <input type="number" step="0.001" class="pkg-quantity" placeholder="Quantity" style="flex:1;" onwheel="event.currentTarget.blur()">
+            <button type="button" class="btn btn-danger" onclick="removePackagingRow(this)" style="padding:0.4rem 0.8rem;">Remove</button>
+        </div>`;
+    updatePackagingDropdowns();
+}
+
+function toggleLegacyMode() {
+    const isLegacy = document.getElementById('isLegacyToggle').checked;
+    document.getElementById('fillBatch').style.display = isLegacy ? 'none' : '';
+    document.getElementById('fillBatchLegacy').style.display = isLegacy ? '' : 'none';
+    document.getElementById('fillBatch').required = !isLegacy;
+    clearCalculations();
+    if (isLegacy) {
+        document.getElementById('theoreticalSection').style.display = 'none';
+    }
+}
+
+async function loadHistory() {
+    try {
+        const productText = document.getElementById('fillHistoryProduct')?.value || '';
+        const month = document.getElementById('fillMonth')?.value || '';
+        const status = document.getElementById('fillStatus')?.value || '';
+        let url = '/api/filling/history';
+        const params = [];
+        if (productText) params.push(`products=${encodeURIComponent(productText)}`);
+        if (month) params.push(`month=${encodeURIComponent(month)}`);
+        if (status) params.push(`status=${encodeURIComponent(status)}`);
+        if (params.length) url += '?' + params.join('&');
+        const result = await fetch(url).then(r => r.json());
+        const container = document.getElementById('fillingHistory');
+
+        if (result.success && result.data.length > 0) {
+            let html = `<div style="overflow-x:auto;"><table><thead><tr>
+                <th>Date</th><th>Product</th><th>Batch</th><th>Pack (kg)</th>
+                <th>Bulk Used</th><th>Bottles</th><th>Theoretical</th>
+                <th>Diff</th><th>Diff%</th><th>Packaging</th>
+                <th>Damages</th><th>Samples</th><th>Actions</th>
+            </tr></thead><tbody>`;
+
+            result.data.forEach(record => {
+                const pkgStr = record.packaging_used.map(p => `${p.component_name}: ${p.quantity_used}`).join(', ');
+                const diffClass = record.bottles_diff >= 0 ? 'sufficient' : 'insufficient';
+                const escProd = (record.product_name||'').replace(/'/g, "\\'");
+                const escBatch = (record.batch_number||'').replace(/'/g, "\\'");
+
+                const legacyStyle = record.is_legacy ? 'background:#fff8e1;border-left:4px solid #f59e0b;' : '';
+                html += `<tr style="${legacyStyle}">
+                    <td>${record.date}</td>
+                    <td>${record.product_name}</td>
+                    <td><strong>${record.batch_number}</strong>${record.is_legacy ? ' <span style="font-size:0.75rem;background:#f59e0b;color:#fff;padding:1px 5px;border-radius:3px;">Legacy</span>' : ''}</td>
+                    <td>${formatNumber(record.pack_size_kg, 4)}</td>
+                    <td>${formatNumber(record.bulk_used_kg, 2)} kg</td>
+                    <td>${record.actual_bottles_filled}</td>
+                    <td>${record.theoretical_bottles}</td>
+                    <td class="${diffClass}">${record.bottles_diff >= 0 ? '+' : ''}${record.bottles_diff}</td>
+                    <td class="${diffClass}">${formatNumber(record.bottles_diff_percentage, 2)}%</td>
+                    <td style="font-size:0.85rem;">${pkgStr || '—'}</td>
+                    <td>${record.damages_reported || 0}</td>
+                    <td>${record.samples_sent || 0}</td>
+                    <td>
+                        <button class="btn btn-sm btn-warning"
+                            onclick="openFillingDamageModal('${escProd}', '${record.pack_size_kg||''}', '${escBatch}')">
+                            💥 Damage
+                        </button>
+                        <button class="btn btn-sm btn-primary"
+                            onclick="openSampleModal('${escProd}', '${escBatch}', '${record.pack_size_kg||''}')">
+                            🧪 Sample
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteFilling(${record.id})">Delete</button>
+                    </td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No filling records yet.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading history: ' + error.message, 'danger');
+    }
+}
+
+async function loadCurrentStock() {
+    try {
+        // Always fetch total counts across all months — no month filter applied here
+        let url = '/api/filling/current-stock';
+        const params = [];
+        if (params.length) url += '?' + params.join('&');
+        const res = await fetch(url).then(r => r.json());
+        const stockContainerId = 'currentStockBox';
+        let existing = document.getElementById(stockContainerId);
+        if (existing) existing.remove();
+        const card = document.createElement('div');
+        card.id = stockContainerId;
+        card.className = 'card';
+        let html = '<h4>📦 Current Filling Stock (remaining to be boxed)</h4>';
+        if (res.success && res.data.length) {
+            html += `<table><thead><tr><th>Product</th><th>Pack Size</th><th>Total Filled</th><th>Boxed</th><th>Samples</th><th>Damages</th><th>Remaining</th></tr></thead><tbody>`;
+            res.data.forEach(r => {
+                const escProd = (r.product_name||'').replace(/'/g, "\\'");
+                html += `<tr>
+                    <td>${r.product_name}</td><td>${r.pack_size_kg||'—'}</td>
+                    <td>${r.total_filled}</td><td>${r.boxed}</td>
+                    <td>${r.samples}</td><td>${r.damages||0}</td>
+                    <td><strong>${r.remaining_to_box}</strong></td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+        } else html += '<p>No filled stock found.</p>';
+        card.innerHTML = html;
+        document.querySelector('.card:nth-of-type(2)').after(card);
+    } catch (err) { console.error(err); }
+}
+
+// ---------- Sample Modal (per-row) ----------
+
+function openSampleModal(productName, batchNumber, packSize) {
+    document.getElementById('sampleProductHidden').value = productName;
+    document.getElementById('sampleBatchHidden').value = batchNumber;
+    document.getElementById('samplePackSizeHidden').value = packSize;
+    document.getElementById('sampleProductDisplay').value = productName;
+    document.getElementById('sampleBatchDisplay').value = batchNumber || '(all batches)';
+    document.getElementById('samplePackSizeDisplay').value = packSize ? packSize + ' kg' : '—';
+    document.getElementById('sampleDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('sampleQty').value = '';
+    document.getElementById('sampleReason').value = '';
+    openModal('sampleModal');
+}
+
+async function submitSample(e) {
+    e.preventDefault();
+    const data = {
+        date: document.getElementById('sampleDate').value,
+        product_name: document.getElementById('sampleProductHidden').value,
+        batch_number: document.getElementById('sampleBatchHidden').value || null,
+        pack_size_kg: parseFloat(document.getElementById('samplePackSizeHidden').value) || null,
+        quantity: parseInt(document.getElementById('sampleQty').value) || 0,
+        reason: document.getElementById('sampleReason').value || ''
+    };
+    if (!data.product_name) { showAlert('No product selected', 'warning'); return; }
+    if (!data.quantity || data.quantity <= 0) { showAlert('Enter a valid quantity', 'warning'); return; }
+    try {
+        const result = await fetch('/api/samples/add', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        }).then(r => r.json());
+        if (result.success) {
+            showAlert(result.message, 'success');
+            closeModal('sampleModal');
+            loadHistory();
+            loadCurrentStock();
+            loadSampleHistory();
+        } else showAlert(result.error || 'Failed', 'danger');
+    } catch (err) { showAlert('Error recording sample: ' + err.message, 'danger'); }
+}
+
+async function loadSampleHistory() {
+    try {
+        const month = document.getElementById('sampleMonth')?.value || '';
+        let url = '/api/samples/history';
+        if (month) url += `?month=${encodeURIComponent(month)}`;
+        const res = await fetch(url).then(r => r.json());
+        const container = document.getElementById('sampleHistory');
+        if (res.success && res.data.length) {
+            let html = `<table><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Pack Size</th><th>Qty</th><th>Reason</th><th>Actions</th></tr></thead><tbody>`;
+            res.data.forEach(s => {
+                html += `<tr>
+                    <td>${s.date}</td><td>${s.product_name}</td><td>${s.batch_number||'—'}</td>
+                    <td>${s.pack_size_kg||'—'}</td><td>${s.quantity}</td><td>${s.reason||'—'}</td>
+                    <td><button class="btn btn-sm btn-danger" onclick="deleteSample(${s.id})">Delete</button></td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } else container.innerHTML = '<p>No samples recorded.</p>';
+    } catch (err) { showAlert('Error loading samples: ' + err.message, 'danger'); }
+}
+
+async function deleteSample(id) {
+    if (!confirm('Delete this sample? This will restore availability of filled bottles.')) return;
+    try {
+        const res = await fetch(`/api/samples/delete/${id}`, {method:'DELETE'}).then(r => r.json());
+        if (res.success) { showAlert(res.message, 'success'); loadSampleHistory(); loadHistory(); loadCurrentStock(); }
+        else showAlert(res.error || 'Delete failed', 'danger');
+    } catch (err) { showAlert('Error deleting sample: ' + err.message, 'danger'); }
+}
+
+// ---------- Damage Modal (per-row) ----------
+
+function openFillingDamageModal(product_name, pack_size, batch_number) {
+    const id = 'fillDamageModal';
+    let modal = document.getElementById(id);
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = id;
+    modal.className = 'modal';
+    modal.innerHTML = `
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>💥 Report Filling Damage — ${product_name}${pack_size ? ' (' + pack_size + ' kg)' : ''}${batch_number ? ' Batch: ' + batch_number : ''}</h3>
+            <span class="close" onclick="closeModal('${id}')">&times;</span>
+        </div>
+        <form onsubmit="submitFillingDamage(event, '${product_name.replace(/'/g,"\\'")}', '${pack_size}', '${(batch_number||'').replace(/'/g,"\\'")}')">
+            <div class="form-group"><label>Quantity *</label><input type="number" step="1" id="fillDamageQty" required></div>
+            <div class="form-group"><label>Date</label><input type="date" id="fillDamageDate" value="${new Date().toISOString().split('T')[0]}"></div>
+            <div class="form-group"><label>Remarks *</label><textarea id="fillDamageNotes" required></textarea></div>
+            <button class="btn btn-warning">Report Damage</button>
+            <button type="button" class="btn" onclick="closeModal('${id}')">Cancel</button>
+        </form>
+    </div>`;
+    document.body.appendChild(modal);
+    openModal(id);
+}
+
+async function submitFillingDamage(e, product_name, pack_size, batch_number) {
+    e.preventDefault();
+    const qty = parseInt(document.getElementById('fillDamageQty').value) || 0;
+    const date = document.getElementById('fillDamageDate').value;
+    const notes = document.getElementById('fillDamageNotes').value || '';
+    if (!qty || qty <= 0) return alert('Enter a valid quantity');
+    try {
+        const res = await fetch('/api/filling/report-damage', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({product_name, batch_number: batch_number||null, pack_size_kg: pack_size||null, quantity: qty, date, reason: notes})
+        }).then(r => r.json());
+        if (res.success) {
+            showAlert(res.message, 'success');
+            closeModal('fillDamageModal');
+            loadCurrentStock();
+            loadHistory();
+            loadDamageHistory();
+        } else showAlert(res.error || 'Failed', 'danger');
+    } catch (err) { showAlert('Error: ' + err.message, 'danger'); }
+}
+
+async function loadDamageHistory() {
+    try {
+        const month = document.getElementById('damageHistoryMonth')?.value || '';
+        let url = '/api/filling/damage-history';
+        if (month) url += `?month=${encodeURIComponent(month)}`;
+        const res = await fetch(url).then(r => r.json());
+        const container = document.getElementById('fillingDamageHistory');
+        if (res.success && res.data.length) {
+            let html = `<table><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Pack Size</th><th>Qty</th><th>Reason</th><th>Actions</th></tr></thead><tbody>`;
+            res.data.forEach(d => {
+                html += `<tr>
+                    <td>${d.date}</td><td>${d.product_name}</td><td>${d.batch_number||'—'}</td>
+                    <td>${d.pack_size_kg||'—'}</td><td>${d.quantity}</td><td>${d.reason||'—'}</td>
+                    <td><button class="btn btn-sm btn-danger" onclick="deleteDamage(${d.id})">Delete</button></td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } else container.innerHTML = '<p>No damage records yet.</p>';
+    } catch (err) {
+        document.getElementById('fillingDamageHistory').innerHTML = '<p style="color:#e74c3c;">Error loading damage history: ' + err.message + '</p>';
+    }
+}
+
+async function deleteDamage(id) {
+    if (!confirm('Delete this damage record? The bottles will be restored to current filling stock.')) return;
+    try {
+        const res = await fetch(`/api/filling/damage/delete/${id}`, {method:'DELETE'}).then(r => r.json());
+        if (res.success) { showAlert(res.message, 'success'); loadDamageHistory(); loadHistory(); loadCurrentStock(); }
+        else showAlert(res.error || 'Delete failed', 'danger');
+    } catch (err) { showAlert('Error deleting damage record: ' + err.message, 'danger'); }
+}
+
+async function deleteFilling(id) {
+    if (!confirm('Delete this filling record? This will restore packaging and free up batch bulk if applicable.')) return;
+    try {
+        const res = await fetch(`/api/filling/delete/${id}`, {method:'DELETE'}).then(r => r.json());
+        if (res.success) { showAlert(res.message, 'success'); loadHistory(); loadPackagingComponents(); }
+        else showAlert(res.error || 'Delete failed', 'danger');
+    } catch (err) { showAlert('Error deleting filling: ' + err.message, 'danger'); }
+}
+
+// Initialize
+document.getElementById('fillDate').value = new Date().toISOString().split('T')[0];
+document.getElementById('fillMonth').value = new Date().toISOString().slice(0,7);
+document.getElementById('sampleMonth').value = new Date().toISOString().slice(0,7);
+document.getElementById('damageHistoryMonth').value = new Date().toISOString().slice(0,7);
+loadProducts();
+loadPackagingComponents();
+loadHistory();
+loadCurrentStock();
+loadSampleHistory();
+loadDamageHistory();
+</script>
+{% endblock %}

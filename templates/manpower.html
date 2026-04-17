@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Manpower & Productivity - Manufacturing System V2{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>👥 Daily Manpower Entry</h2>
+    
+    <form id="manpowerForm" onsubmit="saveManpower(event)">
+        <div class="form-group">
+            <label>Date *</label>
+            <input type="date" id="manDate" required>
+        </div>
+        
+        <h3>Production Department</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Male Workers</label>
+                <input type="number" id="prodMale" required min="0" value="0">
+            </div>
+            <div class="form-group">
+                <label>Female Workers</label>
+                <input type="number" id="prodFemale" required min="0" value="0">
+            </div>
+            <div class="form-group">
+                <label>Total Hours</label>
+                <input type="number" step="0.5" id="prodHours" required min="0" value="8">
+            </div>
+        </div>
+        
+        <h3>Filling Department</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Male Workers</label>
+                <input type="number" id="fillMale" onwheel="event.currentTarget.blur()">
+            </div>
+            <div class="form-group">
+                <label>Female Workers</label>
+                <input type="number" id="fillFemale" onwheel="event.currentTarget.blur()">
+            </div>
+            <div class="form-group">
+                <label>Total Hours</label>
+                <input type="number" step="0.5" id="fillHours" required min="0" value="8">
+            </div>
+        </div>
+        
+        <h3>Boxing Department</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Male Workers</label>
+                <input type="number" id="boxMale" onwheel="event.currentTarget.blur()">
+            </div>
+            <div class="form-group">
+                <label>Female Workers</label>
+                <input type="number" id="boxFemale" onwheel="event.currentTarget.blur()">
+            </div>
+            <div class="form-group">
+                <label>Total Hours</label>
+                <input type="number" step="0.5" id="boxHours" required min="0" value="8">
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea id="manNotes" rows="2"></textarea>
+        </div>
+        
+        <button type="submit" class="btn btn-primary">Save Manpower Data</button>
+    </form>
+</div>
+
+<div class="card">
+    <h3>📋 Manpower History with Production Data</h3>
+    <div id="manpowerHistory"></div>
+</div>
+
+<script>
+async function saveManpower(event) {
+    event.preventDefault();
+    
+    const data = {
+        date: document.getElementById('manDate').value,
+        production_male: parseInt(document.getElementById('prodMale').value),
+        production_female: parseInt(document.getElementById('prodFemale').value),
+        production_hours: parseFloat(document.getElementById('prodHours').value),
+        filling_male: parseInt(document.getElementById('fillMale').value),
+        filling_female: parseInt(document.getElementById('fillFemale').value),
+        filling_hours: parseFloat(document.getElementById('fillHours').value),
+        boxing_male: parseInt(document.getElementById('boxMale').value),
+        boxing_female: parseInt(document.getElementById('boxFemale').value),
+        boxing_hours: parseFloat(document.getElementById('boxHours').value),
+        notes: document.getElementById('manNotes').value
+    };
+    
+    try {
+        const response = await fetch('/api/manpower/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(result.message, 'success');
+            document.getElementById('manpowerForm').reset();
+            document.getElementById('manDate').value = new Date().toISOString().split('T')[0];
+            loadHistory();
+        } else {
+            showAlert(result.error, 'danger');
+        }
+    } catch (error) {
+        showAlert('Error saving manpower: ' + error.message, 'danger');
+    }
+}
+
+async function loadHistory() {
+    try {
+        const response = await fetch('/api/manpower/history');
+        const result = await response.json();
+        const container = document.getElementById('manpowerHistory');
+        
+        if (result.success && result.data.length > 0) {
+            let html = `<table><thead><tr>
+                <th>Date</th>
+                <th>Prod M</th><th>Prod F</th>
+                <th>Fill M</th><th>Fill F</th>
+                <th>Box M</th><th>Box F</th>
+                <th>Batches Made</th>
+                <th>Bottles Filled</th>
+                <th>Boxes Made</th>
+                <th>Notes</th>
+            </tr></thead><tbody>`;
+            
+            result.data.forEach(record => {
+                html += `
+                    <tr>
+                        <td><strong>${record.date}</strong></td>
+                        <td>${record.production_male}</td>
+                        <td>${record.production_female}</td>
+                        <td>${record.filling_male}</td>
+                        <td>${record.filling_female}</td>
+                        <td>${record.boxing_male}</td>
+                        <td>${record.boxing_female}</td>
+                        <td style="background: #e3f2fd;"><strong>${record.batches_made || 0}</strong></td>
+                        <td style="background: #e8f5e9;"><strong>${record.bottles_filled || 0}</strong></td>
+                        <td style="background: #fff3e0;"><strong>${record.boxes_made || 0}</strong></td>
+                        <td style="font-size: 0.85rem;">${record.notes || '-'}</td>
+                    </tr>
+                `;
+            });
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No manpower records yet.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading history: ' + error.message, 'danger');
+    }
+}
+
+// Initialize
+document.getElementById('manDate').value = new Date().toISOString().split('T')[0];
+loadHistory();
+</script>
+{% endblock %}

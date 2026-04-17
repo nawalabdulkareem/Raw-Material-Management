@@ -1,0 +1,531 @@
+{% extends "base.html" %}
+{% block title %}Raw Materials - Manufacturing System{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>🧪 Raw Materials Management</h2>
+    <div style="margin-bottom: 1rem;">
+        <button class="btn btn-primary" onclick="openAddModal()">➕ Add New Ingredient</button>
+        <button class="btn btn-success" onclick="refreshIngredients()">🔄 Refresh</button>
+    </div>
+    <div style="overflow-x:auto;">
+    <table id="ingredientsTable">
+        <thead>
+            <tr>
+                <th>S.No</th>
+                <th>Name</th>
+                <th>Quantity (kg)</th>
+                <th>Supplier</th>
+                <th>Stock by Price Tier</th>
+                <th>Current Stock Cost</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="ingredientsBody">
+            <tr><td colspan="7" class="loading">Loading...</td></tr>
+        </tbody>
+    </table>
+    </div>
+</div>
+
+<!-- RM Movement History -->
+<div class="card" style="margin-top:2rem;">
+    <h2>📋 Raw Material Movement History</h2>
+    <div style="margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;">
+        <div class="form-group" style="margin:0;">
+            <label>Filter by Ingredient:</label>
+            <input type="text" id="filterIngredient" placeholder="Ingredient name (leave empty for all)" style="width:250px;">
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label>Start Date:</label>
+            <input type="date" id="filterStartDate" style="width:150px;">
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label>End Date:</label>
+            <input type="date" id="filterEndDate" style="width:150px;">
+        </div>
+        <button class="btn btn-primary" onclick="loadMovementHistory()">🔍 Filter</button>
+        <button class="btn" onclick="clearFilters()">Clear Filters</button>
+    </div>
+    <div id="movementHistoryContainer">
+        <table id="movementHistoryTable">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Ingredient</th>
+                    <th>Type</th>
+                    <th>Quantity (kg)</th>
+                    <th>Cost/kg (₹)</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody id="movementHistoryBody">
+                <tr><td colspan="6" class="loading">Click "Filter" to load movement history...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add/Edit Modal -->
+<div id="ingredientModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modalTitle">Add Ingredient</h3>
+            <span class="close" onclick="closeModal('ingredientModal')">&times;</span>
+        </div>
+        <form id="ingredientForm" onsubmit="saveIngredient(event)">
+            <input type="hidden" id="ingredientId">
+            <div class="form-group">
+                <label>Ingredient Name *</label>
+                <input type="text" id="ingredientName" required>
+            </div>
+            <div class="form-group">
+                <label>Quantity (kg) *</label>
+                <input type="number" step="0.0001" onwheel="event.currentTarget.blur()" id="ingredientQty" required>
+            </div>
+            <div class="form-group">
+                <label>Supplier</label>
+                <input type="text" id="ingredientSupplier">
+            </div>
+            <div class="form-group">
+                <label>Cost per kg (₹)</label>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()" id="ingredientCost">
+            </div>
+            <!-- Lot selector: only shown when editing and lots exist -->
+            <div id="editLotSection" style="display:none;" class="form-group">
+                <label>Adjust Which Cost Batch? <span style="color:#e74c3c;font-size:0.85rem;">Required when changing quantity</span></label>
+                <select id="editLotSelect" style="width:100%;padding:0.4rem;font-size:0.9rem;">
+                    <option value="">— Select batch to adjust —</option>
+                </select>
+                <small style="color:#888;margin-top:0.25rem;display:block;">Stock by Price Tier will be updated for the selected batch.</small>
+            </div>
+            <div style="margin-top:1.5rem;">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn" onclick="closeModal('ingredientModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Restock Modal -->
+<div id="restockModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Restock Ingredient</h3>
+            <span class="close" onclick="closeModal('restockModal')">&times;</span>
+        </div>
+        <form id="restockForm" onsubmit="confirmRestock(event)">
+            <input type="hidden" id="restockId">
+            <div class="form-group">
+                <label>Ingredient</label>
+                <input type="text" id="restockName" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Current Stock (kg)</label>
+                <input type="text" id="restockCurrent" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Add Quantity (kg) *</label>
+                <input type="number" step="0.001" min="0.001" onwheel="event.currentTarget.blur()" id="restockQty" required>
+            </div>
+            <div class="form-group">
+                <label>Cost per kg (₹) * <span style="color:#e74c3c;font-size:0.85rem;">Required for FIFO tracking</span></label>
+                <input type="number" step="0.001" min="0.001" onwheel="event.currentTarget.blur()" id="restockCostPerKg" required>
+                <small id="restockCostHint" style="color:#888;display:block;margin-top:0.25rem;"></small>
+            </div>
+            <div class="form-group">
+                <label>Restock Date *</label>
+                <input type="date" id="restockDate" required>
+            </div>
+            <div class="form-group">
+                <label>Supplier <span style="color:#888;font-size:0.85rem;">(leave blank to keep existing)</span></label>
+                <input type="text" id="restockSupplier">
+            </div>
+            <div class="form-group">
+                <label>Notes <span style="color:#888;font-size:0.85rem;">(optional — leave blank for auto description)</span></label>
+                <textarea id="restockNotes" rows="2"></textarea>
+            </div>
+            <div style="margin-top:1.5rem;">
+                <button type="submit" class="btn btn-success">✅ Restock</button>
+                <button type="button" class="btn" onclick="closeModal('restockModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Requisition Form Modal -->
+<div id="requisitionModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="reqModalTitle">Generate Requisition Form</h3>
+            <span class="close" onclick="closeModal('requisitionModal')">&times;</span>
+        </div>
+        <form id="requisitionForm" onsubmit="submitRequisition(event)">
+            <input type="hidden" id="reqItemName">
+            <input type="hidden" id="reqItemType" value="ingredient">
+            <div class="form-group">
+                <label>Ingredient</label>
+                <input type="text" id="reqItemDisplay" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Current Stock</label>
+                <input type="text" id="reqCurrentStock" readonly style="background:#f5f5f5;">
+            </div>
+            <div class="form-group">
+                <label>Cost <span style="color:#888;font-size:0.85rem;">(autofilled from last restock — editable, e.g. 2/kg)</span></label>
+                <input type="text" id="reqCost" placeholder="e.g. 145/kg or 2.5/piece">
+            </div>
+            <div class="form-group">
+                <label>Requisition Number</label>
+                <input type="text" id="reqNumber" placeholder="e.g. REQ-001">
+            </div>
+            <div class="form-group">
+                <label>Department</label>
+                <input type="text" id="reqDepartment" placeholder="e.g. Production">
+            </div>
+            <div class="form-group">
+                <label>Count / Quantity to Purchase</label>
+                <input type="number" id="reqCount" step="0.001" placeholder="e.g. 50">
+            </div>
+            <div class="form-group">
+                <label>Purpose</label>
+                <input type="text" id="reqPurpose" placeholder="e.g. Monthly production run">
+            </div>
+            <div class="form-group">
+                <label>Status</label>
+                <input type="text" id="reqStatus" placeholder="e.g. Urgent / Moderate">
+            </div>
+            <div class="form-group">
+                <label>Prepared By</label>
+                <input type="text" id="reqPreparedBy" value="Akshay">
+            </div>
+            <div style="margin-top:1.5rem;">
+                <button type="submit" class="btn" style="background:#8e44ad;color:#fff;">📋 Download Requisition Form</button>
+                <button type="button" class="btn" onclick="closeModal('requisitionModal')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+let currentEditId = null;
+let lotSummaryCache = {};
+
+async function refreshIngredients() {
+    try {
+        const [ingRes, lotRes] = await Promise.all([
+            fetch('/api/ingredients').then(r => r.json()),
+            fetch('/api/rm/lot-summary').then(r => r.json()).catch(() => ({success:false, data:{}}))
+        ]);
+        if (!ingRes.success) { showAlert('Error loading ingredients: ' + ingRes.error, 'danger'); return; }
+
+        lotSummaryCache = (lotRes.success && lotRes.data) ? lotRes.data : {};
+        const tbody = document.getElementById('ingredientsBody');
+        tbody.innerHTML = '';
+
+        if (ingRes.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No ingredients yet. Click "Add New Ingredient" to start.</td></tr>';
+            return;
+        }
+
+        ingRes.data.forEach((ing, index) => {
+            const lots = lotSummaryCache[ing.name] || [];
+
+            // Stock by price tier — show ALL lots
+            let tierHtml = '';
+            if (lots.length === 0) {
+                tierHtml = `<span style="color:#999;font-size:0.85rem;">₹${formatNumber(ing.cost_per_kg||0,2)}/kg <em>(no batches)</em></span>`;
+            } else {
+                tierHtml = lots.map((l, i) =>
+                    `<div style="white-space:nowrap;font-size:0.85rem;padding:1px 0;${i>0?'border-top:1px dashed #eee;':''}">
+                        ${formatNumber(l.qty_remaining,3)} kg @ <strong>₹${formatNumber(l.unit_cost,2)}/kg</strong>
+                        <span style="color:#aaa;"> (${l.received_date || '?'})</span>
+                     </div>`
+                ).join('');
+            }
+
+            // Current stock cost = oldest remaining lot (FIFO — next to be consumed)
+            let costHtml = '';
+            if (lots.length > 0) {
+                const next = lots[0];
+                costHtml = `<strong style="color:#2c7be5;">₹${formatNumber(next.unit_cost,2)}/kg</strong>`;
+                if (lots.length > 1) {
+                    const avgCost = lots.reduce((s,l) => s + l.unit_cost * l.qty_remaining, 0) /
+                                    lots.reduce((s,l) => s + l.qty_remaining, 0.0001);
+                    costHtml += `<br><small style="color:#888;">avg ₹${formatNumber(avgCost,2)}/kg · ${lots.length} batches</small>`;
+                }
+            } else {
+                costHtml = `<span style="color:#999;">₹${formatNumber(ing.cost_per_kg||0,2)}/kg</span>`;
+            }
+
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${index + 1}</td>
+                <td><strong>${ing.name}</strong></td>
+                <td>${formatNumber(ing.qty_kg, 3)} kg</td>
+                <td>${ing.supplier || '—'}</td>
+                <td>${tierHtml}</td>
+                <td>${costHtml}</td>
+                <td>
+                    <button class="btn btn-success" style="padding:0.3rem 0.6rem;font-size:0.85rem;"
+                        onclick="openRestockModal(${ing.id}, '${ing.name.replace(/'/g,"\\'")}', ${ing.qty_kg}, ${ing.cost_per_kg||0}, '${(ing.supplier||'').replace(/'/g,"\\'")}')">Restock</button>
+                    <button class="btn btn-primary" style="padding:0.3rem 0.6rem;font-size:0.85rem;"
+                        onclick="editIngredient(${ing.id})">Edit</button>
+                    <button class="btn btn-danger" style="padding:0.3rem 0.6rem;font-size:0.85rem;"
+                        onclick="deleteIngredient(${ing.id}, '${ing.name.replace(/'/g,"\\'")}')">Delete</button>
+                    <button class="btn" style="padding:0.3rem 0.6rem;font-size:0.85rem;background:#8e44ad;color:#fff;"
+                        onclick="openRequisitionModal('${ing.name.replace(/'/g,"\\'")}', '${formatNumber(ing.qty_kg,3)} kg')">📋 Requisition</button>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    } catch (error) {
+        showAlert('Error loading ingredients: ' + error.message, 'danger');
+    }
+}
+
+function openAddModal() {
+    currentEditId = null;
+    document.getElementById('modalTitle').textContent = 'Add New Ingredient';
+    document.getElementById('ingredientForm').reset();
+    document.getElementById('ingredientId').value = '';
+    const nameInput = document.getElementById('ingredientName');
+    nameInput.readOnly = false;
+    nameInput.style.background = '';
+    document.getElementById('editLotSection').style.display = 'none';
+    openModal('ingredientModal');
+}
+
+async function editIngredient(id) {
+    try {
+        const [ingRes, lotRes] = await Promise.all([
+            fetch('/api/ingredients').then(r => r.json()),
+            fetch('/api/rm/lot-summary').then(r => r.json()).catch(() => ({success:false, data:{}}))
+        ]);
+        if (ingRes.success) {
+            const ingredient = ingRes.data.find(i => i.id === id);
+            if (ingredient) {
+                currentEditId = id;
+                document.getElementById('modalTitle').textContent = 'Edit Ingredient';
+                document.getElementById('ingredientId').value = id;
+                // Name is readonly during edit
+                const nameInput = document.getElementById('ingredientName');
+                nameInput.value = ingredient.name;
+                nameInput.readOnly = true;
+                nameInput.style.background = '#f5f5f5';
+                document.getElementById('ingredientQty').value = ingredient.qty_kg;
+                document.getElementById('ingredientSupplier').value = ingredient.supplier || '';
+                document.getElementById('ingredientCost').value = ingredient.cost_per_kg || 0;
+
+                // Populate lot selector
+                const lotSection = document.getElementById('editLotSection');
+                const lotSelect = document.getElementById('editLotSelect');
+                const lots = (lotRes.success && lotRes.data) ? (lotRes.data[ingredient.name] || []) : [];
+                lotSelect.innerHTML = '<option value="">— Select batch to adjust —</option>';
+                if (lots.length > 0) {
+                    lots.forEach(l => {
+                        const opt = document.createElement('option');
+                        opt.value = l.id || '';
+                        opt.textContent = `${formatNumber(l.qty_remaining,3)} kg @ ₹${formatNumber(l.unit_cost,2)}/kg`;
+                        lotSelect.appendChild(opt);
+                    });
+                    // Auto-select if only one lot
+                    if (lots.length === 1) lotSelect.value = lots[0].id || '';
+                    lotSection.style.display = '';
+                } else {
+                    lotSection.style.display = 'none';
+                }
+
+                openModal('ingredientModal');
+            }
+        }
+    } catch (error) {
+        showAlert('Error loading ingredient: ' + error.message, 'danger');
+    }
+}
+
+async function saveIngredient(event) {
+    event.preventDefault();
+    const data = {
+        name: document.getElementById('ingredientName').value,
+        qty_kg: parseFloat(document.getElementById('ingredientQty').value),
+        supplier: document.getElementById('ingredientSupplier').value,
+        cost_per_kg: parseFloat(document.getElementById('ingredientCost').value) || 0
+    };
+    // Include lot_id when editing so backend adjusts the correct price tier
+    if (currentEditId) {
+        const lotSelect = document.getElementById('editLotSelect');
+        if (lotSelect && lotSelect.value) data.lot_id = parseInt(lotSelect.value);
+    }
+    try {
+        const url = currentEditId ? `/api/ingredients/update/${currentEditId}` : '/api/ingredients/add';
+        const method = currentEditId ? 'PUT' : 'POST';
+        const response = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+        const result = await response.json();
+        if (result.success) { showAlert(result.message, 'success'); closeModal('ingredientModal'); refreshIngredients(); }
+        else showAlert(result.error, 'danger');
+    } catch (error) {
+        showAlert('Error saving ingredient: ' + error.message, 'danger');
+    }
+}
+
+function openRestockModal(id, name, currentQty, currentCost, currentSupplier) {
+    document.getElementById('restockId').value = id;
+    document.getElementById('restockName').value = name;
+    document.getElementById('restockCurrent').value = formatNumber(currentQty, 3) + ' kg';
+    document.getElementById('restockQty').value = '';
+    document.getElementById('restockCostPerKg').value = '';
+    document.getElementById('restockDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('restockSupplier').value = '';
+    document.getElementById('restockNotes').value = '';
+    const hint = document.getElementById('restockCostHint');
+    hint.textContent = currentCost > 0 ? `Current price: ₹${formatNumber(currentCost,2)}/kg — enter new price if it changed` : '';
+    openModal('restockModal');
+}
+
+async function confirmRestock(event) {
+    event.preventDefault();
+    const cost = parseFloat(document.getElementById('restockCostPerKg').value);
+    if (!cost || cost <= 0) { showAlert('Cost per kg is required for FIFO tracking', 'warning'); return; }
+    const id = document.getElementById('restockId').value;
+    const data = {
+        quantity: parseFloat(document.getElementById('restockQty').value),
+        unit_cost: cost,
+        date: document.getElementById('restockDate').value,
+        supplier: document.getElementById('restockSupplier').value || '',
+        notes: document.getElementById('restockNotes').value || ''
+    };
+    try {
+        const response = await fetch(`/api/ingredients/restock/${id}`, {
+            method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+        });
+        const result = await response.json();
+        if (result.success) { showAlert(result.message, 'success'); closeModal('restockModal'); refreshIngredients(); }
+        else showAlert(result.error, 'danger');
+    } catch (error) {
+        showAlert('Error restocking: ' + error.message, 'danger');
+    }
+}
+
+async function deleteIngredient(id, name) {
+    if (!confirm(`Delete "${name}"?\n\nThis removes the ingredient and all its movement history. This cannot be undone.`)) return;
+    try {
+        const response = await fetch(`/api/ingredients/delete/${id}`, {method:'DELETE'});
+        const text = await response.text();
+        let result;
+        try { result = JSON.parse(text); }
+        catch(e) { showAlert('Delete failed: server returned unexpected response', 'danger'); return; }
+        if (result.success) { showAlert(result.message, 'success'); refreshIngredients(); }
+        else showAlert(result.error || 'Delete failed', 'danger');
+    } catch (error) {
+        showAlert('Error deleting ingredient: ' + error.message, 'danger');
+    }
+}
+
+async function loadMovementHistory() {
+    const filterIngredient = document.getElementById('filterIngredient').value.trim();
+    const startDate = document.getElementById('filterStartDate').value;
+    const endDate = document.getElementById('filterEndDate').value;
+    let url = '/api/raw-materials/movement-history?';
+    if (filterIngredient) url += `ingredients=${encodeURIComponent(filterIngredient)}&`;
+    if (startDate) url += `start_date=${startDate}&`;
+    if (endDate) url += `end_date=${endDate}&`;
+    try {
+        const result = await fetch(url).then(r => r.json());
+        const tbody = document.getElementById('movementHistoryBody');
+        if (result.success && result.data.length > 0) {
+            tbody.innerHTML = result.data.map(m => {
+                const cls = m.movement_type === 'IN' ? 'sufficient' : m.movement_type === 'OUT' ? 'insufficient' : '';
+                const sym = m.movement_type === 'IN' ? '➕' : m.movement_type === 'OUT' ? '➖' : '⚙️';
+                const costDisp = (m.unit_cost && m.unit_cost > 0) ? `₹${formatNumber(m.unit_cost,2)}` : '—';
+                return `<tr>
+                    <td>${m.date}</td>
+                    <td><strong>${m.ingredient_name}</strong></td>
+                    <td class="${cls}">${sym} ${m.movement_type}</td>
+                    <td>${formatNumber(m.quantity_kg, 4)} kg</td>
+                    <td>${costDisp}</td>
+                    <td style="font-size:0.9rem;">${m.notes || '—'}</td>
+                </tr>`;
+            }).join('');
+        } else if (result.success) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No records found.</td></tr>';
+        } else {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#e74c3c;">Error loading history</td></tr>';
+        }
+    } catch (error) {
+        document.getElementById('movementHistoryBody').innerHTML =
+            '<tr><td colspan="6" style="text-align:center;color:#e74c3c;">Error: ' + error.message + '</td></tr>';
+    }
+}
+
+function clearFilters() {
+    document.getElementById('filterIngredient').value = '';
+    document.getElementById('filterStartDate').value = '';
+    document.getElementById('filterEndDate').value = '';
+    document.getElementById('movementHistoryBody').innerHTML =
+        '<tr><td colspan="6" class="loading">Click "Filter" to load movement history...</td></tr>';
+}
+
+refreshIngredients();
+
+function openRequisitionModal(ingredientName, currentStock) {
+    document.getElementById('reqItemName').value = ingredientName;
+    document.getElementById('reqItemType').value = 'ingredient';
+    document.getElementById('reqItemDisplay').value = ingredientName;
+    document.getElementById('reqCurrentStock').value = currentStock;
+    document.getElementById('reqModalTitle').textContent = 'Requisition Form — ' + ingredientName;
+    // Reset manually-filled fields only
+    document.getElementById('reqNumber').value = '';
+    document.getElementById('reqDepartment').value = '';
+    document.getElementById('reqCount').value = '';
+    document.getElementById('reqPurpose').value = '';
+    document.getElementById('reqStatus').value = '';
+    document.getElementById('reqPreparedBy').value = 'Akshay';
+    // Autofill cost from most recent lot (last entry = newest restock)
+    const lots = lotSummaryCache[ingredientName] || [];
+    const lastCost = lots.length > 0 ? lots[lots.length - 1].unit_cost : '';
+    document.getElementById('reqCost').value = lastCost ? String(lastCost) : '';
+    openModal('requisitionModal');
+}
+
+async function submitRequisition(e) {
+    e.preventDefault();
+    const payload = {
+        item_name:   document.getElementById('reqItemName').value,
+        item_type:   document.getElementById('reqItemType').value,
+        number:      document.getElementById('reqNumber').value,
+        department:  document.getElementById('reqDepartment').value,
+        count:       document.getElementById('reqCount').value,
+        purpose:     document.getElementById('reqPurpose').value,
+        status:      document.getElementById('reqStatus').value,
+        prepared_by: document.getElementById('reqPreparedBy').value,
+        cost:        document.getElementById('reqCost').value,
+    };
+    try {
+        const resp = await fetch('/api/generate-requisition', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showAlert('Error: ' + (err.error || resp.statusText), 'danger');
+            return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Requisition_' + payload.item_name.replace(/\s+/g, '_') + '.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        closeModal('requisitionModal');
+        showAlert('Requisition form downloaded!', 'success');
+    } catch (err) {
+        showAlert('Error generating form: ' + err.message, 'danger');
+    }
+}
+</script>
+{% endblock %}

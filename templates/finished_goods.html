@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Finished Goods{% endblock %}
+{% block content %}
+<div class="card">
+    <h2>✅ Finished Goods Inventory</h2>
+    <button class="btn btn-success" onclick="refreshFG()">🔄 Refresh</button>
+</div>
+
+<div class="card">
+    <h3>Finished Goods</h3>
+    <div style="display:flex; gap:1rem; align-items:center;">
+        <label>Month:</label>
+        <input type="month" id="fgMonth" value="">
+        <label>Products (optional, comma-separated):</label>
+        <input id="fgProducts" type="text" placeholder="e.g. Product A, Product B" style="min-width:200px; max-width:300px;" />
+        <button class="btn btn-primary" onclick="loadFGMainTable()">Refresh</button>
+    </div>
+    <div id="fgMain" style="margin-top:1rem;"></div>
+</div>
+
+<div class="card">
+    <h3>Shipment History</h3>
+    <div id="shipmentsList" style="margin-top:1rem;"></div>
+</div>
+
+<script>
+// Initialize
+document.getElementById('fgMonth').value = new Date().toISOString().slice(0,7);
+// product input is free-text comma-separated; no options preload needed
+
+let fgGroups = [];
+
+async function loadFGMainTable() {
+    const month = document.getElementById('fgMonth').value;
+    const prodText = document.getElementById('fgProducts').value.trim();
+    const productsParam = prodText ? `&products=${encodeURIComponent(prodText)}` : '';
+    const resp = await fetch(`/api/finished-goods?month=${month}${productsParam}`);
+    const res = await resp.json();
+    const container = document.getElementById('fgMain');
+    if (!res.success) return container.innerText = 'Error: ' + res.error;
+    if (!res.data || res.data.length === 0) {
+        container.innerHTML = '<p>No finished goods found for the selected filters.</p>';
+        loadShipmentHistory();
+        return;
+    }
+
+    // Group rows by box configuration (sorted product_name + pack_size + units_per_box)
+    const groups = {};
+    const groupOrder = [];
+
+    res.data.forEach(row => {
+        if ((row.boxes_count || 0) <= 0) return; // skip fully-shipped entries
+        const productKey = (row.products || [])
+            .map(p => `${p.product_name}||${p.pack_size_kg}||${p.units_per_box}`)
+            .sort()
+            .join(':::');
+
+        if (!groups[productKey]) {
+            groups[productKey] = {
+                product_names: row.product_names,
+                pack_sizes: row.pack_sizes,
+                total_boxes: 0,
+                boxing_entries: [],
+                product_remaining: {}
+            };
+            groupOrder.push(productKey);
+        }
+
+        const g = groups[productKey];
+        g.boxing_entries.push({ boxing_id: row.boxing_id, boxes_count: row.boxes_count });
+        g.total_boxes += row.boxes_count;
+
+        (row.products || []).forEach(p => {
+            const pk = `${p.product_name}||${p.pack_size_kg}`;
+            if (!g.product_remaining[pk]) {
+                g.product_remaining[pk] = { product_name: p.product_name, pack_size_kg: p.pack_size_kg, remaining: 0 };
+            }
+            g.product_remaining[pk].remaining += (p.remaining_bottles || 0);
+        });
+    });
+
+    fgGroups = groupOrder.map(k => groups[k]);
+
+    if (fgGroups.length === 0) {
+        container.innerHTML = '<p>No finished goods found for the selected filters.</p>';
+        loadShipmentHistory();
+        return;
+    }
+
+    let html = '<div style="overflow-x:auto;"><table><thead><tr><th>Product(s)</th><th>Pack Size</th><th>Boxes Available</th><th>Remaining Bottles</th><th>Action</th></tr></thead><tbody>';
+
+    fgGroups.forEach((g, idx) => {
+        const bottlesDisplay = Object.values(g.product_remaining)
+            .map(pr => `${pr.product_name}: ${pr.remaining}`)
+            .join(', ');
+        html += `<tr>
+            <td>${g.product_names}</td>
+            <td>${g.pack_sizes}</td>
+            <td><strong>${g.total_boxes}</strong></td>
+            <td>${bottlesDisplay}</td>
+            <td><button class="btn btn-sm btn-primary" onclick="shipGroupedRow(${idx})">Ship</button></td>
+        </tr>`;
+    });
+
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+    loadShipmentHistory();
+}
+
+async function shipGroupedRow(groupIdx) {
+    const g = fgGroups[groupIdx];
+    if (!g) { alert('Group not found'); return; }
+
+    const boxes = parseInt(prompt(`Number of boxes to ship (max ${g.total_boxes}):`, '1'), 10);
+    if (!boxes || boxes <= 0) return;
+    if (boxes > g.total_boxes) { alert(`Cannot ship more than ${g.total_boxes} available boxes`); return; }
+
+    const date = prompt('Date (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+    if (!date) return;
+    const invoice = prompt('Invoice number (optional):', '');
+    const notes = prompt('Remark (required):', '');
+    if (!notes || !notes.trim()) { alert('Remark is required'); return; }
+
+    // Ship from boxing entries in FIFO order
+    let remaining = boxes;
+    let success = true;
+    let errorMsg = '';
+
+    for (const entry of g.boxing_entries) {
+        if (remaining <= 0) break;
+        const toShip = Math.min(remaining, entry.boxes_count);
+        try {
+            const payload = { boxing_id: entry.boxing_id, boxes_sent: toShip, date: date, notes: notes, invoice_number: invoice };
+            const resp = await fetch('/api/finished-goods/send-out', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            const res = await resp.json();
+            if (!res.success) { success = false; errorMsg = res.error; break; }
+            remaining -= toShip;
+        } catch (e) { success = false; errorMsg = e.message; break; }
+    }
+
+    if (success) {
+        alert('Shipment recorded');
+        loadFGMainTable();
+        loadShipmentHistory();
+    } else {
+        alert('Error: ' + errorMsg);
+    }
+}
+
+// Shipment history (group by date+notes+boxing_id to show combined records)
+async function loadShipmentHistory() {
+    const month = document.getElementById('fgMonth').value;
+    const resp = await fetch(`/api/finished-goods/shipments?month=${month}`);
+    const res = await resp.json();
+    const container = document.getElementById('shipmentsList');
+    if (!res.success) return container.innerText = 'Error: ' + res.error;
+    if (!res.data || res.data.length === 0) return container.innerHTML = '<p>No shipments yet.</p>';
+
+    // group shipments by date+boxing_id+notes+invoice_number so multi-product shipments are shown as one entry
+    const groups = {};
+    res.data.forEach(s => {
+        const key = `${s.date}|${s.boxing_id || ''}|${s.notes || ''}|${s.invoice_number || ''}`;
+        if (!groups[key]) groups[key] = {date: s.date, boxing_id: s.boxing_id, notes: s.notes, invoice: s.invoice_number, items: [], boxes: 0, units: 0};
+        groups[key].items.push(s);
+        // record boxes_sent only on first item to avoid multiplying by number of products
+        if (groups[key].boxes === 0) {
+            groups[key].boxes = parseInt(s.boxes_sent || 0);
+        }
+        groups[key].units += parseInt(s.units_sent || 0);
+    });
+
+    let html = '<h4>Shipment History</h4><table><thead><tr><th>Date</th><th>Products (units)</th><th>Boxes</th><th>Units</th><th>Invoice</th><th>Remark</th><th>Actions</th></tr></thead><tbody>';
+    Object.keys(groups).forEach(k => {
+        const g = groups[k];
+        const prodStr = g.items.map(it => `${it.product_name}${it.pack_size_kg ? ' ('+it.pack_size_kg+'kg)' : ''}: ${it.units_sent}`).join(', ');
+        // use array of ids for delete-group
+        const ids = g.items.map(it => it.id);
+        html += `<tr><td>${g.date}</td><td style="font-size:0.95rem;">${prodStr}</td><td>${g.boxes}</td><td>${g.units}</td><td>${g.invoice || ''}</td><td>${g.notes || ''}</td><td><button class="btn btn-sm btn-danger" onclick='deleteShipmentGroup(${JSON.stringify(ids)})'>Delete</button></td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+// Prepare shipments list container
+const shipDiv = document.getElementById('fgMain');
+// create shipmentsList container if not present
+let shipmentsContainer = document.getElementById('shipmentsList');
+if (!shipmentsContainer) {
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML = '<h3>Shipment History</h3><div id="shipmentsList" style="margin-top:1rem;"></div>';
+    document.querySelector('body > .card:last-of-type').after(card);
+    shipmentsContainer = document.getElementById('shipmentsList');
+}
+
+// initial load
+loadFGMainTable();
+
+async function deleteShipment(id) {
+    if (!confirm('Delete this shipment? This will restore counts.')) return;
+    try {
+        const resp = await fetch(`/api/finished-goods/shipments/${id}`, { method: 'DELETE' });
+        const res = await resp.json();
+        if (res.success) { alert('Shipment deleted'); loadFGMainTable(); loadShipmentHistory(); } else alert('Error: ' + res.error);
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function deleteShipmentGroup(ids) {
+    if (!confirm('Delete this shipment group? This will restore counts for all items.')) return;
+    try {
+        for (const id of ids) {
+            await fetch(`/api/finished-goods/shipments/${id}`, { method: 'DELETE' });
+        }
+        alert('Shipment group deleted');
+        loadFGMainTable(); loadShipmentHistory();
+    } catch (e) { alert('Error deleting shipment group: ' + e.message); }
+}
+
+</script>
+{% endblock %}

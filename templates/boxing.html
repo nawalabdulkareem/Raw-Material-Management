@@ -1,0 +1,450 @@
+{% extends "base.html" %}
+{% block title %}Boxing Operations - Manufacturing System V2{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📦 Boxing Operations</h2>
+    
+    <form id="boxingForm" onsubmit="confirmBoxing(event)">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Date *</label>
+                <input type="date" id="boxDate" required>
+            </div>
+            
+            <div class="form-group">
+                <label>Boxes Made *</label>
+                <input type="number" onwheel="event.currentTarget.blur()" id="boxesMade" required min="1" onchange="calculateTotalUnits()">
+            </div>
+            
+            <div class="form-group">
+                <label>Units per Box *</label>
+                <input type="number" onwheel="event.currentTarget.blur()" id="unitsPerBox" required min="1" onchange="calculateTotalUnits()">
+            </div>
+        </div>
+        
+        <div id="totalUnitsDisplay" style="margin: 1rem 0; padding: 1rem; background: #f0f8ff; border-radius: 4px; display: none;">
+            <h4>Total Units to Box: <span id="totalUnits">0</span></h4>
+        </div>
+        
+        <h3>Products in Box</h3>
+        <p style="font-size: 0.9rem; color: #666;">Allocate units to products. Total must equal: <strong><span id="requiredUnits">0</span></strong></p>
+        <div id="productsContainer">
+            <div class="product-row" style="display: flex; gap: 1rem; margin-bottom: 0.5rem; align-items: center;">
+                    <select class="prod-name" style="flex: 2;" onchange="autoFillUnits()">
+                        <option value="">Select Product</option>
+                    </select>
+                    <input type="number" onwheel="event.currentTarget.blur()" class="prod-units" placeholder="Units" style="flex: 1;" onchange="validateTotalUnits()">
+                    <select class="prod-packsize" style="width: 140px;"></select>
+                    <button type="button" class="btn btn-danger" onclick="removeProductRow(this)" style="padding: 0.4rem 0.8rem;">Remove</button>
+                </div>
+        </div>
+        <button type="button" class="btn btn-success" onclick="addProductRow()">+ Add Product</button>
+        
+        <div id="unitsValidation" style="margin: 1rem 0; padding: 0.5rem; border-radius: 4px; display: none;"></div>
+        
+        <h3 style="margin-top: 1.5rem;">Packaging Components Used</h3>
+        <div id="packagingComponents">
+        <div class="packaging-row" style="display: flex; gap: 1rem; margin-bottom: 0.5rem; align-items: center;">
+                <select class="pkg-component" style="flex: 2;">
+                    <option value="">Select Component</option>
+                </select>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()" class="pkg-quantity" placeholder="Quantity" style="flex: 1;">
+                <button type="button" class="btn btn-danger" onclick="removePackagingRow(this)" style="padding: 0.4rem 0.8rem;">Remove</button>
+            </div>
+        </div>
+        <button type="button" class="btn btn-success" onclick="addPackagingRow()">+ Add Component</button>
+        
+        <div class="form-group" style="margin-top: 1rem;">
+            <label>Notes</label>
+            <textarea id="boxNotes" rows="2"></textarea>
+        </div>
+        
+        <div style="margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary">✓ Confirm Boxing</button>
+            <button type="button" class="btn" onclick="resetForm()">Clear</button>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h3>📋 Boxing History</h3>
+    <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.5rem;">
+        <label>Month:</label>
+        <input type="month" id="boxMonth" value="">
+        <label>Products (optional, comma-separated):</label>
+        <input id="boxProduct" type="text" placeholder="e.g. Product A, Product B" style="min-width:200px;">
+        <button class="btn btn-primary" onclick="loadHistory()">Filter</button>
+    </div>
+    <div id="boxingHistory"></div>
+</div>
+
+<script>
+let allProducts = [];
+let packagingComponents = [];
+
+async function loadProducts() {
+    const response = await fetch('/api/products');
+    const result = await response.json();
+    if (result.success) {
+        allProducts = result.data;
+        updateProductDropdowns();
+    }
+}
+
+async function loadPackagingComponents() {
+    const response = await fetch('/api/packaging/components');
+    const result = await response.json();
+    if (result.success) {
+        packagingComponents = result.data;
+        updatePackagingDropdowns();
+    }
+}
+
+function updateProductDropdowns() {
+    document.querySelectorAll('.prod-name').forEach(select => {
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">Select Product</option>';
+        allProducts.forEach(prod => {
+            select.innerHTML += `<option value="${prod.name}">${prod.name}</option>`;
+        });
+        select.value = currentValue;
+        // When product changes, load pack sizes for the row
+        select.addEventListener('change', async function() {
+            const row = this.closest('.product-row');
+            await loadPackSizesForRow(row, this.value);
+            autoFillUnits();
+        });
+    });
+    // also update the global boxing filter product list (only if it's a select)
+    const boxSel = document.getElementById('boxProduct');
+    if (boxSel && boxSel.tagName === 'SELECT') {
+        const cur = boxSel.value;
+        boxSel.innerHTML = '<option value="">(all)</option>';
+        allProducts.forEach(prod => boxSel.innerHTML += `<option value="${prod.name}">${prod.name}</option>`);
+        boxSel.value = cur || '';
+    }
+}
+
+async function loadPackSizesForRow(row, productName) {
+    const packSelect = row.querySelector('.prod-packsize');
+    if (!packSelect) return;
+    packSelect.innerHTML = '<option value="">Loading...</option>';
+    try {
+        const url = `/api/filling/pack-sizes?product=${encodeURIComponent(productName || '')}`;
+        const resp = await fetch(url);
+        const res = await resp.json();
+        if (res.success) {
+            packSelect.innerHTML = '<option value="">Select</option>';
+            res.data.forEach(ps => {
+                packSelect.innerHTML += `<option value="${ps}">${ps} kg</option>`;
+            });
+        } else {
+            packSelect.innerHTML = '<option value="">-</option>';
+        }
+    } catch (e) {
+        packSelect.innerHTML = '<option value="">-</option>';
+    }
+}
+
+function updatePackagingDropdowns() {
+    document.querySelectorAll('.pkg-component').forEach(select => {
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">Select Component</option>';
+        packagingComponents.forEach(comp => {
+            select.innerHTML += `<option value="${comp.component_name}">${comp.component_name} (${comp.current_qty} available)</option>`;
+        });
+        select.value = currentValue;
+    });
+}
+
+function calculateTotalUnits() {
+    const boxes = parseInt(document.getElementById('boxesMade').value) || 0;
+    const unitsPerBox = parseInt(document.getElementById('unitsPerBox').value) || 0;
+    const total = boxes * unitsPerBox;
+    
+    if (total > 0) {
+        document.getElementById('totalUnits').textContent = total;
+        document.getElementById('requiredUnits').textContent = total;
+        document.getElementById('totalUnitsDisplay').style.display = 'block';
+        autoFillUnits();
+    } else {
+        document.getElementById('totalUnitsDisplay').style.display = 'none';
+    }
+}
+
+function autoFillUnits() {
+    const totalRequired = parseInt(document.getElementById('totalUnits').textContent) || 0;
+    if (totalRequired === 0) return;
+    
+    const productRows = document.querySelectorAll('.product-row');
+    const filledProducts = Array.from(productRows).filter(row => 
+        row.querySelector('.prod-name').value !== ''
+    );
+    
+    if (filledProducts.length === 0) return;
+    
+    // Auto-fill logic
+    if (filledProducts.length === 1) {
+        // Single product: all units
+        filledProducts[0].querySelector('.prod-units').value = totalRequired;
+    } else if (filledProducts.length === 2) {
+        // Two products: split 50/50
+        const half = Math.floor(totalRequired / 2);
+        filledProducts[0].querySelector('.prod-units').value = half;
+        filledProducts[1].querySelector('.prod-units').value = totalRequired - half;
+    }
+    // For 3+ products, user must manually enter
+    
+    validateTotalUnits();
+}
+
+function validateTotalUnits() {
+    const totalRequired = parseInt(document.getElementById('totalUnits').textContent) || 0;
+    let totalAllocated = 0;
+    
+    document.querySelectorAll('.product-row').forEach(row => {
+        const units = parseInt(row.querySelector('.prod-units').value) || 0;
+        totalAllocated += units;
+    });
+    
+    const validation = document.getElementById('unitsValidation');
+    
+    if (totalAllocated === 0) {
+        validation.style.display = 'none';
+        return;
+    }
+    
+    if (totalAllocated === totalRequired) {
+        validation.style.display = 'block';
+        validation.style.background = '#d4edda';
+        validation.style.color = '#155724';
+        validation.innerHTML = `✓ Total units match: ${totalAllocated} = ${totalRequired}`;
+    } else {
+        validation.style.display = 'block';
+        validation.style.background = '#f8d7da';
+        validation.style.color = '#721c24';
+        validation.innerHTML = `✗ Units mismatch: ${totalAllocated} ≠ ${totalRequired} (${totalAllocated > totalRequired ? 'Over' : 'Under'} by ${Math.abs(totalAllocated - totalRequired)})`;
+    }
+}
+
+function addProductRow() {
+    const container = document.getElementById('productsContainer');
+    const newRow = document.createElement('div');
+    newRow.className = 'product-row';
+    newRow.style.cssText = 'display: flex; gap: 1rem; margin-bottom: 0.5rem; align-items: center;';
+    newRow.innerHTML = `
+        <select class="prod-name" style="flex: 2;" onchange="autoFillUnits()">
+            <option value="">Select Product</option>
+        </select>
+        <input type="number" onwheel="event.currentTarget.blur()" class="prod-units" placeholder="Units" style="flex: 1;"  onchange="validateTotalUnits()">
+        <select class="prod-packsize" style="width: 140px;"></select>
+        <button type="button" class="btn btn-danger" onclick="removeProductRow(this)" style="padding: 0.4rem 0.8rem;">Remove</button>
+    `;
+    container.appendChild(newRow);
+    updateProductDropdowns();
+}
+
+function removeProductRow(button) {
+    if (document.querySelectorAll('.product-row').length > 1) {
+        button.parentElement.remove();
+        validateTotalUnits();
+    } else {
+        showAlert('At least one product is required', 'warning');
+    }
+}
+
+function addPackagingRow() {
+    const container = document.getElementById('packagingComponents');
+    const newRow = document.createElement('div');
+    newRow.className = 'packaging-row';
+    newRow.style.cssText = 'display: flex; gap: 1rem; margin-bottom: 0.5rem; align-items: center;';
+    newRow.innerHTML = `
+        <select class="pkg-component" style="flex: 2;">
+            <option value="">Select Component</option>
+        </select>
+        <input type="number" step="0.001" class="pkg-quantity" placeholder="Quantity" style="flex: 1;" onwheel="event.currentTarget.blur()">
+        <button type="button" class="btn btn-danger" onclick="removePackagingRow(this)" style="padding: 0.4rem 0.8rem;">Remove</button>
+    `;
+    container.appendChild(newRow);
+    updatePackagingDropdowns();
+}
+
+function removePackagingRow(button) {
+    button.parentElement.remove();
+}
+
+async function confirmBoxing(event) {
+    event.preventDefault();
+    
+    // Validate units
+    const totalRequired = parseInt(document.getElementById('totalUnits').textContent) || 0;
+    let totalAllocated = 0;
+    
+    const products = [];
+    document.querySelectorAll('.product-row').forEach(row => {
+        const name = row.querySelector('.prod-name').value;
+        const units = parseInt(row.querySelector('.prod-units').value) || 0;
+        const pack_size = parseFloat(row.querySelector('.prod-packsize')?.value) || 0;
+        if (name && units > 0) {
+            products.push({ product_name: name, units: units, pack_size_kg: pack_size });
+            totalAllocated += units;
+        }
+    });
+    
+    if (products.length === 0) {
+        showAlert('Please add at least one product', 'warning');
+        return;
+    }
+    
+    if (totalAllocated !== totalRequired) {
+        showAlert(`Total units (${totalAllocated}) must equal boxes × units per box (${totalRequired})`, 'danger');
+        return;
+    }
+    
+    // Collect packaging
+    const packagingUsage = [];
+    document.querySelectorAll('.packaging-row').forEach(row => {
+        const component = row.querySelector('.pkg-component').value;
+        const quantity = parseFloat(row.querySelector('.pkg-quantity').value) || 0;
+        if (component && quantity > 0) {
+            packagingUsage.push({ component_name: component, quantity: quantity });
+        }
+    });
+    
+    if (packagingUsage.length === 0) {
+        if (!confirm('No packaging components entered. Continue anyway?')) return;
+    }
+    
+    const data = {
+        date: document.getElementById('boxDate').value,
+        boxes_made: parseInt(document.getElementById('boxesMade').value),
+        units_per_box: parseInt(document.getElementById('unitsPerBox').value),
+        products: products,
+        packaging_usage: packagingUsage,
+        notes: document.getElementById('boxNotes').value
+    };
+    
+    try {
+        const response = await fetch('/api/boxing/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showAlert(`Boxing confirmed! ${result.data.total_units_boxed} units in ${data.boxes_made} boxes`, 'success');
+            resetForm();
+            loadHistory();
+            loadPackagingComponents();
+        } else {
+            showAlert(result.error, 'danger');
+        }
+    } catch (error) {
+        showAlert('Error confirming boxing: ' + error.message, 'danger');
+    }
+}
+
+function resetForm() {
+    document.getElementById('boxingForm').reset();
+    document.getElementById('boxDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('totalUnitsDisplay').style.display = 'none';
+    document.getElementById('unitsValidation').style.display = 'none';
+    
+    // Reset to 1 product row
+    document.getElementById('productsContainer').innerHTML = `
+        <div class="product-row" style="display: flex; gap: 1rem; margin-bottom: 0.5rem; align-items: center;">
+            <select class="prod-name" style="flex: 2;" onchange="autoFillUnits()">
+                <option value="">Select Product</option>
+            </select>
+            <input type="number" onwheel="event.currentTarget.blur()"class="prod-units" placeholder="Units" style="flex: 1;" onchange="validateTotalUnits()">
+            <select class="prod-packsize" style="width: 140px;"></select>
+            <button type="button" class="btn btn-danger" onclick="removeProductRow(this)" style="padding: 0.4rem 0.8rem;">Remove</button>
+        </div>
+    `;
+    
+    // Reset to 1 packaging row
+    document.getElementById('packagingComponents').innerHTML = `
+        <div class="packaging-row" style="display: flex; gap: 1rem; margin-bottom: 0.5rem; align-items: center;">
+            <select class="pkg-component" style="flex: 2;">
+                <option value="">Select Component</option>
+            </select>
+            <input type="number" step="0.001" class="pkg-quantity" placeholder="Quantity" style="flex: 1;" onwheel="event.currentTarget.blur()">
+            <button type="button" class="btn btn-danger" onclick="removePackagingRow(this)" style="padding: 0.4rem 0.8rem;">Remove</button>
+        </div>
+    `;
+    
+    updateProductDropdowns();
+    updatePackagingDropdowns();
+}
+
+async function loadHistory() {
+    try {
+        const productText = document.getElementById('boxProduct')?.value || '';
+        const month = document.getElementById('boxMonth')?.value || '';
+        let url = '/api/boxing/history';
+        const params = [];
+        if (productText) params.push(`products=${encodeURIComponent(productText)}`);
+        if (month) params.push(`month=${encodeURIComponent(month)}`);
+        if (params.length) url += '?' + params.join('&');
+        const response = await fetch(url);
+        const result = await response.json();
+        const container = document.getElementById('boxingHistory');
+        
+        if (result.success && result.data.length > 0) {
+            let html = '<table><thead><tr><th>Date</th><th>Boxes Made</th><th>Units/Box</th><th>Total Units</th><th>Products</th><th>Packaging Used</th><th>Actions</th></tr></thead><tbody>';
+            
+            result.data.forEach(record => {
+                    const prodStr = record.products.map(p => `${p.product_name}: ${p.units_in_box}${p.pack_size_kg ? ' ('+p.pack_size_kg+'kg)' : ''}`).join(', ');
+                const pkgStr = record.packaging_used.map(p => `${p.component_name}: ${p.quantity_used}`).join(', ');
+                
+                html += `
+                    <tr>
+                        <td>${record.date}</td>
+                        <td>${record.boxes_made}</td>
+                        <td>${record.units_per_box}</td>
+                        <td><strong>${record.total_units_boxed}</strong></td>
+                        <td style="font-size: 0.85rem;">${prodStr}</td>
+                                <td style="font-size: 0.85rem;">${pkgStr || '-'}</td>
+                                <td><button class="btn btn-sm btn-danger" onclick="deleteBoxing(${record.id})">Delete</button></td>
+                            </tr>
+                `;
+            });
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No boxing records yet.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading history: ' + error.message, 'danger');
+    }
+}
+
+// Initialize
+document.getElementById('boxDate').value = new Date().toISOString().split('T')[0];
+loadProducts();
+loadPackagingComponents();
+loadHistory();
+// Leave boxMonth empty so all records load by default
+
+async function deleteBoxing(id) {
+    if (!confirm('Delete this boxing record? This will restore packaging inventory.')) return;
+    try {
+        const resp = await fetch(`/api/boxing/delete/${id}`, { method: 'DELETE' });
+        const res = await resp.json();
+        if (res.success) {
+            showAlert(res.message, 'success');
+            loadHistory();
+            loadPackagingComponents();
+        } else {
+            showAlert(res.error || 'Delete failed', 'danger');
+        }
+    } catch (err) {
+        showAlert('Error deleting boxing: ' + err.message, 'danger');
+    }
+}
+</script>
+{% endblock %}

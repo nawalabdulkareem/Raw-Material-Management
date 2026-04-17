@@ -1,0 +1,588 @@
+{% extends "base.html" %}
+{% block title %}Monthly Audit - Manufacturing System V2{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📑 Monthly Stock Audit</h2>
+    <p><strong>Process:</strong> 1) View monthly summary → 2) Prepare audit → 3) Enter physical counts → 4) Confirm audit</p>
+</div>
+
+<div class="card">
+    <h3>📊 Monthly Ingredient and Packaging Summary</h3>
+    <div class="form-group" style="max-width:300px;">
+        <label>Select Month:</label>
+        <input type="month" id="summaryMonth">
+        <button class="btn btn-primary" onclick="loadMonthlySummary()">View Summary</button>
+    </div>
+    <div id="monthlySummary"></div>
+</div>
+
+<div class="card">
+    <h3>✏️ Conduct Audit</h3>
+    <div class="form-group" style="max-width:300px;">
+        <label>Audit Date:</label>
+        <input type="date" id="auditDate" required>
+        <button class="btn btn-warning" onclick="prepareAudit()">Prepare Audit</button>
+    </div>
+
+    <div id="auditSection" style="display:none;">
+        <p style="color:#666;margin:1rem 0;">
+            Enter actual physical counts below. Where your count differs from system stock and the item
+            has <strong>multiple cost batches</strong>, select which batch to adjust.
+        </p>
+        <div id="auditTable"></div>
+
+        <div class="form-group" style="margin-top:1rem;">
+            <label>Audit Notes:</label>
+            <textarea id="auditNotes" rows="3"></textarea>
+        </div>
+
+        <button class="btn btn-success" onclick="confirmAudit()">✓ Confirm Audit &amp; Update Stock</button>
+    </div>
+</div>
+
+<div class="card">
+    <h3>📊 Monthly Consumption Costs</h3>
+    <div class="form-group" style="max-width:600px;">
+        <label>Select Month:</label>
+        <input type="month" id="costMonth">
+        <label>Filter Products (optional, comma-separated):</label>
+        <input type="text" id="costProducts" placeholder="Leave empty for all products">
+        <button class="btn btn-primary" onclick="loadConsumptionCosts()">View Costs</button>
+        <button onclick="syncConsumptionCosts()">📊 Sync Consumption Costs</button>
+        <button onclick="syncWastageReport()">⚠️ Sync Wastage Report</button>
+    </div>
+    <div id="consumptionCosts"></div>
+</div>
+
+<!-- Sync Cards -->
+<div class="card">
+    <h3>📊 Sync Consumption Costs to Sheets</h3>
+    <input type="month" id="costSyncMonth">
+    <input type="text" id="costSyncProducts" placeholder="Products (or leave empty for all)">
+    <button onclick="syncConsumptionCosts()">Sync</button>
+</div>
+
+<div class="card">
+    <h3>⚠️ Sync Wastage Report to Sheets</h3>
+    <input type="month" id="wastageSyncMonth">
+    <input type="text" id="wastageSyncProducts" placeholder="Products (or leave empty for all)">
+    <button onclick="syncWastageReport()">Sync</button>
+</div>
+
+<div class="card">
+    <h3>📋 Audit History</h3>
+    <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;">
+        <label>Filter by Month:</label>
+        <input type="month" id="auditHistoryMonth">
+        <button class="btn btn-primary" onclick="loadHistory()">🔍 Filter</button>
+        <button class="btn" onclick="document.getElementById('auditHistoryMonth').value=''; loadHistory()">Clear</button>
+    </div>
+    <div id="auditHistory"></div>
+</div>
+
+<script>
+let auditData = [];
+let ingredientLots = {};  // { ingredientName: [{id, qty_remaining, unit_cost, received_date}] }
+let pkgAuditData = [];
+let packagingLots = {};
+
+async function loadMonthlySummary() {
+    const month = document.getElementById('summaryMonth').value;
+    if (!month) { showAlert('Please select a month', 'warning'); return; }
+    try {
+        const result = await fetch(`/api/audit/monthly-summary?month=${month}`).then(r => r.json());
+        const container = document.getElementById('monthlySummary');
+        if (result.success && result.data.length > 0) {
+            let html = '<h4>🧪 Raw Materials</h4>';
+            html += '<table><thead><tr><th>Ingredient</th><th>Start Weight (kg)</th><th>End Weight (kg)</th><th>Used (kg)</th><th>Added (kg)</th></tr></thead><tbody>';
+            result.data.forEach(item => {
+                html += `<tr>
+                    <td><strong>${item.ingredient}</strong></td>
+                    <td>${formatNumber(item.start_weight, 3)}</td>
+                    <td>${formatNumber(item.end_weight, 3)}</td>
+                    <td style="color:#e74c3c;">${formatNumber(item.used_in_month, 3)}</td>
+                    <td style="color:#27ae60;">+${formatNumber(item.added_in_month, 3)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            const pkgData = result.packaging_data || [];
+            if (pkgData.length > 0) {
+                html += '<h4 style="margin-top:1.2rem;">📦 Packaging Components</h4>';
+                html += '<table><thead><tr><th>Component</th><th>Used</th><th>Damaged</th></tr></thead><tbody>';
+                pkgData.forEach(item => {
+                    html += `<tr>
+                        <td><strong>${item.component}</strong></td>
+                        <td style="color:#e74c3c;">${formatNumber(item.used_in_month, 2)} units</td>
+                        <td style="color:#e67e22;">${formatNumber(item.damaged_in_month, 2)} units</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+            }
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No data for this month.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading summary: ' + error.message, 'danger');
+    }
+}
+
+async function prepareAudit() {
+    const auditDate = document.getElementById('auditDate').value;
+    if (!auditDate) { showAlert('Please select audit date', 'warning'); return; }
+    try {
+        const result = await fetch('/api/audit/prepare', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({audit_date: auditDate})
+        }).then(r => r.json());
+
+        if (result.success) {
+            auditData = result.data.ingredients;
+            pkgAuditData = result.data.packaging_components || [];
+
+            // Fetch lots for all packaging components in parallel
+            packagingLots = {};
+            await Promise.all(pkgAuditData.map(async (item) => {
+                try {
+                    const lotRes = await fetch(`/api/packaging/lots/${encodeURIComponent(item.name)}`).then(r => r.json());
+                    packagingLots[item.name] = (lotRes.success && lotRes.data) ? lotRes.data : [];
+                } catch(e) {
+                    packagingLots[item.name] = [];
+                }
+            }));
+
+            // Fetch lots for all ingredients in parallel
+            ingredientLots = {};
+            await Promise.all(auditData.map(async (item) => {
+                try {
+                    const lotRes = await fetch(`/api/rm/lots/${encodeURIComponent(item.name)}`).then(r => r.json());
+                    ingredientLots[item.name] = (lotRes.success && lotRes.data) ? lotRes.data : [];
+                } catch(e) {
+                    ingredientLots[item.name] = [];
+                }
+            }));
+
+            displayAuditTable();
+            document.getElementById('auditSection').style.display = 'block';
+            showAlert(`Audit prepared. Last audit: ${result.data.last_audit_date}`, 'info');
+        } else {
+            showAlert(result.error, 'danger');
+        }
+    } catch (error) {
+        showAlert('Error preparing audit: ' + error.message, 'danger');
+    }
+}
+
+function displayAuditTable() {
+    const container = document.getElementById('auditTable');
+
+    let html = `<table><thead><tr>
+        <th>Ingredient</th>
+        <th>Expected (kg)</th>
+        <th>Actual Count (kg)</th>
+        <th>Difference</th>
+        <th>Batch to Adjust</th>
+    </tr></thead><tbody>`;
+
+    auditData.forEach((item, index) => {
+        const lots = ingredientLots[item.name] || [];
+        const hasMultipleLots = lots.length > 1;
+
+        // Build lot selector
+        let lotSelectorHtml = '';
+        if (lots.length === 0) {
+            lotSelectorHtml = '<span style="color:#aaa;font-size:0.85rem;">No batches recorded</span>';
+        } else if (lots.length === 1) {
+            const l = lots[0];
+            lotSelectorHtml = `
+                <input type="hidden" class="audit-lot-id" data-index="${index}" value="${l.id}">
+                <span style="font-size:0.85rem;">
+                    Lot #${l.id}: ${formatNumber(l.qty_remaining,3)} kg @ ₹${formatNumber(l.unit_cost,2)}/kg
+                    <span style="color:#aaa;">(${l.received_date || '?'})</span>
+                    <em style="color:#27ae60;"> — auto-selected</em>
+                </span>`;
+        } else {
+            // Multiple lots: show dropdown
+            const options = lots.map(l =>
+                `<option value="${l.id}">Lot #${l.id}: ${formatNumber(l.qty_remaining,3)} kg @ ₹${formatNumber(l.unit_cost,2)}/kg (${l.received_date || '?'})</option>`
+            ).join('');
+            lotSelectorHtml = `<select class="audit-lot-id" data-index="${index}" style="max-width:320px;font-size:0.85rem;">
+                <option value="">— Select batch to adjust —</option>
+                ${options}
+            </select>
+            <small style="display:block;color:#888;margin-top:0.2rem;">Required if your count differs from system stock</small>`;
+        }
+
+        html += `<tr>
+            <td><strong>${item.name}</strong><br>
+                <small style="color:#888;">System stock: ${formatNumber(item.expected_weight,3)} kg</small>
+            </td>
+            <td>${formatNumber(item.expected_weight, 3)}</td>
+            <td>
+                <input type="number" step="0.001" onwheel="event.currentTarget.blur()"
+                       class="actual-weight" data-index="${index}"
+                       value="${item.expected_weight}" style="width:110px;"
+                       oninput="updateDiffDisplay(${index})">
+            </td>
+            <td>
+                <span id="diff-display-${index}" style="font-weight:bold;"></span>
+            </td>
+            <td>${lotSelectorHtml}</td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+
+    // Packaging audit table
+    let pkgHtml = '';
+    if (pkgAuditData.length > 0) {
+        pkgHtml = `<h4 style="margin-top:1.5rem;">📦 Packaging Components</h4>
+        <table><thead><tr>
+            <th>Component</th><th>Expected (units)</th><th>Actual Count</th><th>Difference</th><th>Lot to Adjust</th>
+        </tr></thead><tbody>`;
+        pkgAuditData.forEach((item, index) => {
+            const lots = packagingLots[item.name] || [];
+            let lotSelectorHtml = '';
+            if (lots.length === 0) {
+                lotSelectorHtml = '<span style="color:#aaa;font-size:0.85rem;">No lots recorded</span>';
+            } else if (lots.length === 1) {
+                const l = lots[0];
+                lotSelectorHtml = `<input type="hidden" class="pkg-audit-lot-id" data-pkg-index="${index}" value="${l.id}">
+                    <span style="font-size:0.85rem;">Lot #${l.id}: ${formatNumber(l.qty_remaining,2)} units @ ₹${formatNumber(l.unit_cost,2)}/unit (${l.received_date||'?'})
+                    <em style="color:#27ae60;"> — auto-selected</em></span>`;
+            } else {
+                const options = lots.map(l =>
+                    `<option value="${l.id}">Lot #${l.id}: ${formatNumber(l.qty_remaining,2)} units @ ₹${formatNumber(l.unit_cost,2)}/unit (${l.received_date||'?'})</option>`
+                ).join('');
+                lotSelectorHtml = `<select class="pkg-audit-lot-id" data-pkg-index="${index}" style="max-width:320px;font-size:0.85rem;">
+                    <option value="">— Select lot to adjust —</option>${options}</select>`;
+            }
+            pkgHtml += `<tr>
+                <td><strong>${item.name}</strong><br>
+                    <small style="color:#888;">System stock: ${formatNumber(item.expected_qty,2)} units</small></td>
+                <td>${formatNumber(item.expected_qty,2)}</td>
+                <td><input type="number" step="0.01" onwheel="event.currentTarget.blur()"
+                    class="pkg-actual-qty" data-pkg-index="${index}"
+                    value="${item.expected_qty}" style="width:110px;"
+                    oninput="updatePkgDiffDisplay(${index})"></td>
+                <td><span id="pkg-diff-display-${index}" style="font-weight:bold;"></span></td>
+                <td>${lotSelectorHtml}</td>
+            </tr>`;
+        });
+        pkgHtml += '</tbody></table>';
+    }
+    container.innerHTML += pkgHtml;
+    pkgAuditData.forEach((_, index) => updatePkgDiffDisplay(index));
+
+    // Initialize diff displays
+    auditData.forEach((_, index) => updateDiffDisplay(index));
+}
+
+function updateDiffDisplay(index) {
+    const input = document.querySelector(`.actual-weight[data-index="${index}"]`);
+    const display = document.getElementById(`diff-display-${index}`);
+    if (!input || !display) return;
+    const actual = parseFloat(input.value) || 0;
+    const expected = auditData[index].expected_weight;
+    const diff = actual - expected;
+    if (Math.abs(diff) < 0.001) {
+        display.textContent = '✓ No change';
+        display.style.color = '#27ae60';
+    } else if (diff > 0) {
+        display.textContent = `+${formatNumber(diff, 3)} kg (surplus)`;
+        display.style.color = '#2c7be5';
+    } else {
+        display.textContent = `${formatNumber(diff, 3)} kg (shortage)`;
+        display.style.color = '#e74c3c';
+    }
+}
+
+function updatePkgDiffDisplay(index) {
+    const input = document.querySelector(`.pkg-actual-qty[data-pkg-index="${index}"]`);
+    const display = document.getElementById(`pkg-diff-display-${index}`);
+    if (!input || !display) return;
+    const actual = parseFloat(input.value) || 0;
+    const expected = pkgAuditData[index].expected_qty;
+    const diff = actual - expected;
+    if (Math.abs(diff) < 0.001) {
+        display.textContent = '✓ No change'; display.style.color = '#27ae60';
+    } else if (diff > 0) {
+        display.textContent = `+${formatNumber(diff,2)} units (surplus)`; display.style.color = '#2c7be5';
+    } else {
+        display.textContent = `${formatNumber(diff,2)} units (shortage)`; display.style.color = '#e74c3c';
+    }
+}
+
+async function confirmAudit() {
+    const auditDate = document.getElementById('auditDate').value;
+    const auditNotes = document.getElementById('auditNotes').value;
+
+    // Collect actual weights and lot selections for ingredients
+    const ingredients = [];
+    let hasError = false;
+    document.querySelectorAll('.actual-weight').forEach(input => {
+        const index = parseInt(input.dataset.index);
+        const item = auditData[index];
+        const actual = parseFloat(input.value);
+        const diff = actual - item.expected_weight;
+
+        let lotId = null;
+        const lotEl = document.querySelector(`.audit-lot-id[data-index="${index}"]`);
+        if (lotEl) lotId = lotEl.value ? parseInt(lotEl.value) : null;
+
+        const lots = ingredientLots[item.name] || [];
+        if (Math.abs(diff) > 0.001 && lots.length > 1 && !lotId) {
+            showAlert(`Please select which batch to adjust for: ${item.name}`, 'warning');
+            hasError = true;
+            return;
+        }
+
+        ingredients.push({
+            name: item.name,
+            previous_weight: item.previous_weight,
+            expected_weight: item.expected_weight,
+            actual_weight: actual,
+            lot_id: lotId
+        });
+    });
+
+    if (hasError) return;
+
+    // Collect packaging audit data
+    const packaging_components = [];
+    document.querySelectorAll('.pkg-actual-qty').forEach(input => {
+        const index = parseInt(input.dataset.pkgIndex);
+        const item = pkgAuditData[index];
+        const actual = parseFloat(input.value);
+        let lotId = null;
+        const lotEl = document.querySelector(`.pkg-audit-lot-id[data-pkg-index="${index}"]`);
+        if (lotEl) lotId = lotEl.value ? parseInt(lotEl.value) : null;
+        const lots = packagingLots[item.name] || [];
+        if (Math.abs(actual - item.expected_qty) > 0.001 && lots.length > 1 && !lotId) {
+            showAlert(`Please select which lot to adjust for: ${item.name}`, 'warning');
+            hasError = true;
+            return;
+        }
+        packaging_components.push({ name: item.name, expected_qty: item.expected_qty, actual_qty: actual, lot_id: lotId });
+    });
+
+    if (hasError) return;
+
+    // Show summary of changes before confirming
+    const changes = ingredients.filter(i => Math.abs(i.actual_weight - i.expected_weight) > 0.001);
+    let confirmMsg = `Confirm audit for ${auditDate}?\n\n`;
+    if (changes.length === 0) {
+        confirmMsg += 'No changes to apply — all stock counts match system values.';
+    } else {
+        confirmMsg += `${changes.length} adjustment(s) will be applied:\n`;
+        changes.forEach(i => {
+            const diff = i.actual_weight - i.expected_weight;
+            const lots = ingredientLots[i.name] || [];
+            let lotInfo = '';
+            if (i.lot_id) {
+                const lot = lots.find(l => l.id === i.lot_id);
+                if (lot) lotInfo = ` (Lot #${i.lot_id} @ ₹${formatNumber(lot.unit_cost,2)}/kg)`;
+            }
+            confirmMsg += `• ${i.name}: ${diff >= 0 ? '+' : ''}${formatNumber(diff,3)} kg${lotInfo}\n`;
+        });
+    }
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const result = await fetch('/api/audit/confirm', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({audit_date: auditDate, ingredients, packaging_components, notes: auditNotes})
+        }).then(r => r.json());
+
+        if (result.success) {
+            showAlert('Audit completed successfully! Stocks updated.', 'success');
+            document.getElementById('auditSection').style.display = 'none';
+            document.getElementById('auditNotes').value = '';
+            loadHistory();
+        } else {
+            showAlert(result.error, 'danger');
+        }
+    } catch (error) {
+        showAlert('Error confirming audit: ' + error.message, 'danger');
+    }
+}
+
+async function loadConsumptionCosts() {
+    const month = document.getElementById('costMonth').value;
+    const products = document.getElementById('costProducts').value;
+    if (!month) { showAlert('Please select a month', 'warning'); return; }
+    try {
+        let url = `/api/audit/monthly-consumption-cost?month=${month}`;
+        if (products) url += `&products=${products}`;
+        const result = await fetch(url).then(r => r.json());
+        const container = document.getElementById('consumptionCosts');
+
+        if (result.success && result.data.length > 0) {
+            let html = '';
+            result.data.forEach(prod => {
+                html += `<div style="border:1px solid #ddd;padding:1rem;margin:1rem 0;border-radius:4px;">`;
+                html += `<h4>${prod.product}</h4>`;
+                html += `<p><strong>Total Cost: ₹${(prod.total_cost||0).toFixed(2)}</strong></p>`;
+
+                html += `<h5>Raw Materials (₹${(prod.total_rm_cost||0).toFixed(2)})</h5>`;
+                html += `<table><thead><tr><th>Ingredient</th><th>KG Used</th><th>Cost/KG</th><th>Total Cost</th></tr></thead><tbody>`;
+                for (const [ing, data] of Object.entries(prod.raw_materials)) {
+                    const tierArr = (data && data.tiers) ? data.tiers : [];
+                    tierArr.forEach((t, i) => {
+                        html += `<tr>
+                            <td>${i === 0 ? `<strong>${ing}</strong>` : ''}</td>
+                            <td>${formatNumber(t.kg_used||0, 4)}</td>
+                            <td>₹${formatNumber(t.cost_per_kg||0, 2)}</td>
+                            <td>₹${formatNumber(t.total_cost||0, 2)}</td>
+                        </tr>`;
+                    });
+                    if (tierArr.length > 1) {
+                        html += `<tr style="font-weight:bold;background:#f9f9f9;">
+                            <td><em>${ing} subtotal</em></td><td></td><td></td>
+                            <td>₹${formatNumber(data.total_cost||0, 2)}</td>
+                        </tr>`;
+                    }
+                }
+                html += `</tbody></table>`;
+
+                html += `<h5>Packaging (₹${(prod.total_packaging_cost||0).toFixed(2)})</h5>`;
+                html += `<table><thead><tr><th>Component</th><th>Qty Used</th><th>Cost/Unit</th><th>Total Cost</th></tr></thead><tbody>`;
+                for (const [comp, data] of Object.entries(prod.packaging)) {
+                    const tierArr = (data && data.tiers) ? data.tiers : [];
+                    tierArr.forEach((t, i) => {
+                        html += `<tr>
+                            <td>${i === 0 ? `<strong>${comp}</strong>` : ''}</td>
+                            <td>${formatNumber(t.qty_used||0, 2)}</td>
+                            <td>₹${formatNumber(t.cost_per_unit||0, 2)}</td>
+                            <td>₹${formatNumber(t.total_cost||0, 2)}</td>
+                        </tr>`;
+                    });
+                    if (tierArr.length > 1) {
+                        html += `<tr style="font-weight:bold;background:#f9f9f9;">
+                            <td><em>${comp} subtotal</em></td><td></td><td></td>
+                            <td>₹${formatNumber(data.total_cost||0, 2)}</td>
+                        </tr>`;
+                    }
+                }
+                html += `</tbody></table>`;
+                html += `</div>`;
+            });
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No data for selected criteria.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading costs: ' + error.message, 'danger');
+    }
+}
+
+async function syncConsumptionCosts() {
+    const month = document.getElementById('costSyncMonth').value || document.getElementById('costMonth').value || new Date().toISOString().slice(0,7);
+    const products = document.getElementById('costSyncProducts').value || document.getElementById('costProducts').value || '';
+    try {
+        const res = await fetch('/api/sync-to-sheets/consumption', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({month, products})
+        }).then(r => r.json());
+        if (res.success) showAlert(res.message, 'success'); else showAlert(res.error || 'Sync failed', 'danger');
+    } catch (err) { showAlert('Sync error: ' + err.message, 'danger'); }
+}
+
+async function syncWastageReport() {
+    const month = document.getElementById('wastageSyncMonth').value || document.getElementById('summaryMonth').value || new Date().toISOString().slice(0,7);
+    const products = document.getElementById('wastageSyncProducts').value || '';
+    try {
+        const res = await fetch('/api/sync-to-sheets/wastage', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({month, products})
+        }).then(r => r.json());
+        if (res.success) showAlert(res.message, 'success'); else showAlert(res.error || 'Sync failed', 'danger');
+    } catch (err) { showAlert('Sync error: ' + err.message, 'danger'); }
+}
+
+async function loadHistory() {
+    try {
+        const month = document.getElementById('auditHistoryMonth')?.value || '';
+        let url = '/api/audit/history';
+        if (month) url += `?month=${encodeURIComponent(month)}`;
+        const result = await fetch(url).then(r => r.json());
+        const container = document.getElementById('auditHistory');
+        if (result.success && result.data.length > 0) {
+            let html = '';
+            result.data.forEach((audit, auditIndex) => {
+                html += `<div style="border:1px solid #ddd;padding:1rem;margin-bottom:1rem;border-radius:4px;">`;
+                html += `<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.5rem;">`;
+                html += `<h4 style="margin:0;">Audit Date: ${audit.audit_date}</h4>`;
+                if (auditIndex === 0) {
+                    html += `<button class="btn btn-sm btn-danger" onclick="deleteAudit(${audit.id}, '${audit.audit_date}')">🗑️ Delete & Restore</button>`;
+                }
+                html += `</div>`;
+                if (audit.notes) html += `<p style="margin:0.3rem 0;"><em>${audit.notes}</em></p>`;
+                html += `<table style="margin-top:0.5rem;"><thead><tr>
+                    <th>Ingredient</th><th>Previous</th><th>Expected</th><th>Actual</th><th>Difference</th>
+                </tr></thead><tbody>`;
+                audit.ingredients.forEach(ing => {
+                    const diff = ing.difference_kg;
+                    const diffClass = Math.abs(diff) < 0.01 ? '' : (diff > 0 ? 'sufficient' : 'insufficient');
+                    html += `<tr>
+                        <td>${ing.ingredient_name}</td>
+                        <td>${formatNumber(ing.previous_weight_kg, 3)}</td>
+                        <td>${formatNumber(ing.expected_weight_kg, 3)}</td>
+                        <td><strong>${formatNumber(ing.actual_weight_kg, 3)}</strong></td>
+                        <td class="${diffClass}">${diff >= 0 ? '+' : ''}${formatNumber(diff, 3)}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+                // Packaging adjustments
+                const pkgAdj = audit.packaging_adjustments || [];
+                if (pkgAdj.length > 0) {
+                    html += `<h5 style="margin:0.75rem 0 0.3rem;">📦 Packaging Adjustments</h5>`;
+                    html += `<table><thead><tr><th>Component</th><th>Type</th><th>Qty Changed</th><th>Notes</th></tr></thead><tbody>`;
+                    pkgAdj.forEach(p => {
+                        const typeColor = p.movement_type === 'IN' ? '#d4edda' : '#f8d7da';
+                        html += `<tr>
+                            <td>${p.component_name}</td>
+                            <td><span style="background:${typeColor};padding:0.1rem 0.4rem;border-radius:3px;">${p.movement_type}</span></td>
+                            <td>${formatNumber(p.quantity, 2)}</td>
+                            <td style="font-size:0.9rem;">${p.notes || '—'}</td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table>';
+                }
+                html += '</div>';
+            });
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p>No audit history yet.</p>';
+        }
+    } catch (error) {
+        showAlert('Error loading history: ' + error.message, 'danger');
+    }
+}
+
+async function deleteAudit(auditId, auditDate) {
+    if (!confirm(`Delete audit from ${auditDate} and REVERSE all stock changes it made?\n\nThis will undo every kg adjustment recorded during that audit.`)) return;
+    try {
+        const text = await fetch(`/api/audit/delete/${auditId}`, {method: 'DELETE'}).then(r => r.text());
+        let res;
+        try { res = JSON.parse(text); } catch(e) { showAlert('Delete failed: unexpected server response', 'danger'); return; }
+        if (res.success) {
+            showAlert(res.message, 'success');
+            loadHistory();
+        } else {
+            showAlert(res.error || 'Delete failed', 'danger');
+        }
+    } catch (err) {
+        showAlert('Error deleting audit: ' + err.message, 'danger');
+    }
+}
+
+// Initialize
+document.getElementById('summaryMonth').value = new Date().toISOString().slice(0, 7);
+document.getElementById('auditDate').value = new Date().toISOString().split('T')[0];
+loadHistory();
+</script>
+{% endblock %}

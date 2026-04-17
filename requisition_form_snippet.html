@@ -1,0 +1,207 @@
+<!--
+=============================================================================
+  REQUISITION FORM - FRONTEND SNIPPET
+  Add the CSS to your <style> block, the Modal HTML just before </body>,
+  and the JS to your <script> block.
+  Then add the "Requisition Form" button next to each row in BOTH:
+    - raw_materials.html   (Raw Materials table)
+    - packaging.html       (Packaging Components table)
+=============================================================================
+-->
+
+
+<!-- ─── 1. CSS  (add inside your existing <style> block) ─────────────────── -->
+<style>
+.btn-requisition {
+    background: #6c3483;
+    color: #fff;
+    border: none;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.btn-requisition:hover { background: #512e76; }
+
+#requisitionModal .modal-header { background: #6c3483; color: #fff; }
+#requisitionModal .modal-header .close { color: #fff; }
+</style>
+
+
+<!-- ─── 2. MODAL HTML  (add just before </body>) ─────────────────────────── -->
+<div class="modal fade" id="requisitionModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">📋 Requisition Form</h5>
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="requisitionForm">
+          <input type="hidden" id="req_item_name">
+          <input type="hidden" id="req_item_type">
+
+          <div class="form-row">
+            <div class="form-group col-md-8">
+              <label>Item</label>
+              <input type="text" class="form-control" id="req_item_display" readonly>
+            </div>
+            <div class="form-group col-md-4">
+              <label>Form Number</label>
+              <input type="text" class="form-control" id="req_number" placeholder="e.g. 001">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-md-6">
+              <label>Department</label>
+              <input type="text" class="form-control" id="req_department" placeholder="e.g. Production">
+            </div>
+            <div class="form-group col-md-6">
+              <label>Quantity to Purchase</label>
+              <input type="text" class="form-control" id="req_count" placeholder="e.g. 50 kg">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Purpose</label>
+            <textarea class="form-control" id="req_purpose" rows="2"
+              placeholder="Reason for purchase..."></textarea>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-md-6">
+              <label>Status</label>
+              <select class="form-control" id="req_status">
+                <option value="Moderate">Moderate</option>
+                <option value="Urgent">Urgent</option>
+              </select>
+            </div>
+            <div class="form-group col-md-6">
+              <label>Prepared By</label>
+              <input type="text" class="form-control" id="req_prepared_by" value="Akshay">
+            </div>
+          </div>
+
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="req_download_btn"
+                onclick="downloadRequisitionForm()">
+          ⬇ Download Form
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ─── 3. JAVASCRIPT  (add inside your existing <script> block) ─────────── -->
+<script>
+/**
+ * Opens the requisition modal pre-filled with item details.
+ * @param {string} itemName  - Name of the ingredient or packaging component
+ * @param {string} itemType  - 'ingredient' or 'packaging'
+ */
+function openRequisitionModal(itemName, itemType) {
+    document.getElementById('req_item_name').value    = itemName;
+    document.getElementById('req_item_type').value    = itemType;
+    document.getElementById('req_item_display').value = itemName;
+    // Reset manual fields
+    document.getElementById('req_number').value      = '';
+    document.getElementById('req_department').value  = '';
+    document.getElementById('req_count').value        = '';
+    document.getElementById('req_purpose').value      = '';
+    document.getElementById('req_status').value       = 'Moderate';
+    document.getElementById('req_prepared_by').value  = 'Akshay';
+    $('#requisitionModal').modal('show');
+}
+
+async function downloadRequisitionForm() {
+    const btn = document.getElementById('req_download_btn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    const payload = {
+        item_name:   document.getElementById('req_item_name').value,
+        item_type:   document.getElementById('req_item_type').value,
+        number:      document.getElementById('req_number').value,
+        department:  document.getElementById('req_department').value,
+        count:       document.getElementById('req_count').value,
+        purpose:     document.getElementById('req_purpose').value,
+        status:      document.getElementById('req_status').value,
+        prepared_by: document.getElementById('req_prepared_by').value,
+    };
+
+    try {
+        const response = await fetch('/api/generate-requisition', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            alert('Error: ' + (err.error || 'Could not generate form'));
+            return;
+        }
+
+        // Trigger browser download
+        const blob = await response.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        const cd   = response.headers.get('Content-Disposition') || '';
+        const match = cd.match(/filename="?([^"]+)"?/);
+        a.download = match ? match[1] : 'Requisition_Form.xlsx';
+        a.href = url;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        $('#requisitionModal').modal('hide');
+    } catch(e) {
+        alert('Network error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '⬇ Download Form';
+    }
+}
+</script>
+
+
+<!-- ─── 4. BUTTON  (add inside each table row in the Actions column) ──────── -->
+
+<!--
+  In raw_materials.html — inside your ingredient table row rendering,
+  wherever you have Edit / Delete buttons, add:
+
+    <button class="btn-requisition"
+            onclick="openRequisitionModal('{{ ingredient.name }}', 'ingredient')">
+      Requisition Form
+    </button>
+
+  In packaging.html — inside your packaging component table row rendering, add:
+
+    <button class="btn-requisition"
+            onclick="openRequisitionModal('{{ component.component_name }}', 'packaging')">
+      Requisition Form
+    </button>
+
+  If your tables are built dynamically via JavaScript (e.g. from a fetch call),
+  add the button inside the JS template literal, for example:
+
+    // raw_materials.html  (JS-rendered table)
+    `<button class="btn-requisition"
+             onclick="openRequisitionModal('${row.name}', 'ingredient')">
+       Requisition Form
+     </button>`
+
+    // packaging.html  (JS-rendered table)
+    `<button class="btn-requisition"
+             onclick="openRequisitionModal('${row.component_name}', 'packaging')">
+       Requisition Form
+     </button>`
+-->
